@@ -18,6 +18,7 @@ public sealed class CameraPreview : IDisposable
     private volatile bool _stop;
     private volatile bool _showSettings;
     private Action<IReadOnlyDictionary<string, double>>? _onSettingsSaved;
+    private Action<Mat>? _onCaptured;
     private double _measuredFps;
     private VideoCapture? _dialogCapture;
     private Mat? _dialogFrame;
@@ -32,11 +33,12 @@ public sealed class CameraPreview : IDisposable
         _onError = onError;
     }
 
-    public void Start(int index, int width, int height, double framesPerSecond, string fourCc, IReadOnlyDictionary<string, double>? controls)
+    public void Start(int index, int width, int height, double framesPerSecond, string fourCc, IReadOnlyDictionary<string, double>? controls, Action<Mat>? onCaptured = null)
     {
         Stop();
         _stop = false;
         _showSettings = false;
+        _onCaptured = onCaptured;
         var generation = Interlocked.Increment(ref _generation);
         _thread = new Thread(() => CaptureLoop(index, width, height, framesPerSecond, fourCc, controls, generation))
         {
@@ -132,6 +134,8 @@ public sealed class CameraPreview : IDisposable
                 continue;
             }
 
+            _onCaptured?.Invoke(frame);
+
             if (!appliedAfterFrame && controls is not null)
             {
                 CameraControlStore.Apply(capture, controls);
@@ -181,6 +185,7 @@ public sealed class CameraPreview : IDisposable
                 return;
             }
 
+            _onCaptured?.Invoke(frame);
             var bitmap = CopyFrame(frame);
             var width = frame.Width;
             var height = frame.Height;
@@ -198,7 +203,7 @@ public sealed class CameraPreview : IDisposable
         }
     }
 
-    private static BitmapSource CopyFrame(Mat frame)
+    internal static BitmapSource CopyFrame(Mat frame)
     {
         var format = frame.Channels() switch
         {

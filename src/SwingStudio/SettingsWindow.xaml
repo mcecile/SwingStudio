@@ -97,11 +97,30 @@
         <ComboBox x:Name="CaptureModeList" Margin="0,0,0,6" DisplayMemberPath="Label" AutomationProperties.Name="Capture mode" />
         <TextBlock x:Name="CaptureModeHint" Foreground="#7A7A7A" TextWrapping="Wrap" Margin="0,0,0,16" />
 
-        <TextBlock Text="Session folder" Foreground="#C8C8C8" Margin="0,0,0,6" />
-        <DockPanel Margin="0,0,0,20">
-            <Button DockPanel.Dock="Right" Content="Browse" Width="88" Margin="8,0,0,0" Click="Browse_Click" AutomationProperties.Name="Browse session folder" />
-            <TextBox x:Name="SessionFolder" VerticalAlignment="Center" AutomationProperties.Name="Session folder" />
-        </DockPanel>
+        <Grid Margin="0,0,0,20">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="16" />
+                <ColumnDefinition Width="140" />
+            </Grid.ColumnDefinitions>
+            <StackPanel>
+                <TextBlock Text="Session folder" Foreground="#C8C8C8" Margin="0,0,0,6" />
+                <DockPanel>
+                    <Button DockPanel.Dock="Right" Content="Browse" Width="88" Margin="8,0,0,0" Click="Browse_Click" AutomationProperties.Name="Browse session folder" />
+                    <TextBox x:Name="SessionFolder" VerticalAlignment="Center" AutomationProperties.Name="Session folder" />
+                </DockPanel>
+            </StackPanel>
+            <StackPanel Grid.Column="2">
+                <TextBlock Text="Swings to keep" Foreground="#C8C8C8" Margin="0,0,0,6" />
+                <DockPanel>
+                    <StackPanel DockPanel.Dock="Right" Width="18" Margin="2,0,0,0">
+                        <RepeatButton Style="{StaticResource SpinButton}" Content="&#xE70E;" Margin="0,0,0,1" Click="SwingsToKeepUp_Click" AutomationProperties.Name="Increase swings to keep" />
+                        <RepeatButton Style="{StaticResource SpinButton}" Content="&#xE70D;" Click="SwingsToKeepDown_Click" AutomationProperties.Name="Decrease swings to keep" />
+                    </StackPanel>
+                    <TextBox x:Name="SwingsToKeep" VerticalAlignment="Center" AutomationProperties.Name="Swings to keep" />
+                </DockPanel>
+            </StackPanel>
+        </Grid>
 
         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
             <Button Content="Cancel" Width="88" Margin="0,0,8,0" IsCancel="True" />

@@ -57,5 +57,8 @@ public sealed class AppSettings
 
     public string SessionFolder { get; set; } = AppPaths.SessionsRoot;
 
+    /// <summary>How many unsaved swings to keep. Saved swings are not counted.</summary>
+    public int SwingsToKeep { get; set; } = 10;
+
     public int ContactOffsetMs { get; set; }
 }

@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace SwingStudio.Session;
 
 public sealed class CaptureMode
@@ -11,10 +13,12 @@ public sealed class CaptureMode
     public string FourCc { get; set; } = "MJPG";
 
     /// <summary>True when this row is the saved request and Camera A did not offer it.</summary>
+    [JsonIgnore]
     public bool IsSavedRequest { get; set; }
 
     public override string ToString() => Label;
 
+    [JsonIgnore]
     public string Label
     {
         get

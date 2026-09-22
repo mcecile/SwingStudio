@@ -21,6 +21,7 @@ public partial class SettingsWindow : Window
         SecondsBefore.Text = settings.SecondsBeforeImpact.ToString("0.0", CultureInfo.InvariantCulture);
         SecondsAfter.Text = settings.SecondsAfterImpact.ToString("0.0", CultureInfo.InvariantCulture);
         SessionFolder.Text = settings.SessionFolder;
+        SwingsToKeep.Text = Math.Clamp(settings.SwingsToKeep <= 0 ? 10 : settings.SwingsToKeep, 1, 50).ToString(CultureInfo.InvariantCulture);
         TriggerOffset.Text = settings.ContactOffsetMs.ToString(CultureInfo.InvariantCulture);
 
         var offered = CameraModeLister.Recall(settings.CameraADevicePath).ToList();
@@ -110,6 +111,12 @@ public partial class SettingsWindow : Window
             return;
         }
 
+        if (!TryReadCount(SwingsToKeep.Text, out var swingsToKeep))
+        {
+            ShowInvalid("Swings to keep must be a whole number from 1 to 50.");
+            return;
+        }
+
         if (CaptureModeList.SelectedItem is not CaptureMode mode)
         {
             ShowInvalid("Choose a capture mode.");
@@ -136,6 +143,7 @@ public partial class SettingsWindow : Window
         _settings.CaptureFramesPerSecond = mode.FramesPerSecond;
         _settings.CaptureFourCc = mode.FourCc;
         _settings.SessionFolder = folder;
+        _settings.SwingsToKeep = swingsToKeep;
         _settings.ContactOffsetMs = offset;
         DialogResult = true;
     }
@@ -147,6 +155,10 @@ public partial class SettingsWindow : Window
     private void SecondsAfterUp_Click(object sender, RoutedEventArgs e) => StepSeconds(SecondsAfter, 0.1);
 
     private void SecondsAfterDown_Click(object sender, RoutedEventArgs e) => StepSeconds(SecondsAfter, -0.1);
+
+    private void SwingsToKeepUp_Click(object sender, RoutedEventArgs e) => StepCount(SwingsToKeep, 1);
+
+    private void SwingsToKeepDown_Click(object sender, RoutedEventArgs e) => StepCount(SwingsToKeep, -1);
 
     private static void StepSeconds(TextBox box, double delta)
     {
@@ -160,6 +172,27 @@ public partial class SettingsWindow : Window
 
         seconds = Math.Clamp(Math.Round(seconds + delta, 1, MidpointRounding.AwayFromZero), 0.1, 10);
         box.Text = seconds.ToString("0.0", CultureInfo.InvariantCulture);
+    }
+
+    private static void StepCount(TextBox box, int delta)
+    {
+        var trimmed = box.Text.Trim();
+        var parsed = int.TryParse(trimmed, NumberStyles.Integer, CultureInfo.InvariantCulture, out var count)
+            || int.TryParse(trimmed, NumberStyles.Integer, CultureInfo.CurrentCulture, out count);
+        if (!parsed)
+        {
+            count = 10;
+        }
+
+        box.Text = Math.Clamp(count + delta, 1, 50).ToString(CultureInfo.InvariantCulture);
+    }
+
+    private static bool TryReadCount(string text, out int count)
+    {
+        var trimmed = text.Trim();
+        var parsed = int.TryParse(trimmed, NumberStyles.Integer, CultureInfo.InvariantCulture, out count)
+            || int.TryParse(trimmed, NumberStyles.Integer, CultureInfo.CurrentCulture, out count);
+        return parsed && count is >= 1 and <= 50;
     }
 
     private static bool TryReadSeconds(string text, out double seconds)

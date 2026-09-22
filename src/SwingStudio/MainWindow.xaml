@@ -75,6 +75,36 @@
                 </Setter.Value>
             </Setter>
         </Style>
+        <Style x:Key="PlaybackButton" TargetType="Button">
+            <Setter Property="Foreground" Value="#E6E6E6" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Width" Value="36" />
+            <Setter Property="Height" Value="32" />
+            <Setter Property="Margin" Value="2,0" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Chrome" Background="{TemplateBinding Background}" CornerRadius="4">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Chrome" Property="Background" Value="#3A3A3A" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Chrome" Property="Background" Value="#454545" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Foreground" Value="#6E6E6E" />
+                                <Setter Property="Cursor" Value="Arrow" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </Window.Resources>
     <DockPanel>
         <Border DockPanel.Dock="Bottom" Background="#252526" BorderBrush="#3A3A3A" BorderThickness="0,1,0,0" Padding="12,6">
@@ -96,7 +126,8 @@
                     <ComboBox x:Name="MicrophoneList" Width="240" VerticalAlignment="Center" AutomationProperties.Name="Microphone"
                               SelectionChanged="MicrophoneList_SelectionChanged" PreviewMouseLeftButtonDown="MicrophoneList_PreviewMouseLeftButtonDown" />
                     <ProgressBar x:Name="MicrophoneLevel" Width="72" Height="8" Margin="12,0,0,0" Minimum="0" Maximum="100" Value="0"
-                                 Background="#3A3A3A" BorderThickness="0" VerticalAlignment="Center" />
+                                 Foreground="#6FCF97" Background="#3A3A3A" BorderThickness="0" VerticalAlignment="Center"
+                                 AutomationProperties.Name="Microphone level" />
                 </StackPanel>
                 <StackPanel Orientation="Horizontal">
                 <Button Style="{StaticResource ToolButton}" Click="SaveSwing_Click" AutomationProperties.Name="Save Swing">
@@ -136,6 +167,11 @@
                 <RowDefinition x:Name="PressureRow" Height="*" MinHeight="80" />
             </Grid.RowDefinitions>
 
+        <Grid Grid.Row="0">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
         <Grid x:Name="VideoSplit" Grid.Row="0">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition x:Name="LeftPaneColumn" Width="*" MinWidth="160" />
@@ -190,6 +226,28 @@
                 </Border>
                 <Canvas x:Name="CameraBOverlay" IsHitTestVisible="False" />
             </Grid>
+        </Grid>
+            <Border Grid.Row="1" Margin="0,8,0,0" Padding="8,4" Background="#2A2A2A" BorderBrush="#3A3A3A" BorderThickness="1" CornerRadius="4">
+                <DockPanel>
+                    <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center">
+                        <ComboBox x:Name="SwingList" Width="200" Margin="4,0,8,0" VerticalAlignment="Center"
+                                  DisplayMemberPath="Label" SelectionChanged="SwingList_SelectionChanged"
+                                  AutomationProperties.Name="Swing" />
+                        <Button x:Name="PlayPauseButton" Style="{StaticResource PlaybackButton}" IsEnabled="False" Click="PlayPause_Click" ToolTip="Play" AutomationProperties.Name="Play">
+                            <TextBlock x:Name="PlayPauseIcon" FontFamily="Segoe MDL2 Assets" FontSize="16" Text="&#xE102;" />
+                        </Button>
+                        <Button x:Name="BackFrameButton" Style="{StaticResource PlaybackButton}" IsEnabled="False" Click="BackFrame_Click" ToolTip="Back frame" AutomationProperties.Name="Back frame">
+                            <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="16" Text="&#xE76B;" />
+                        </Button>
+                        <Button x:Name="ForwardFrameButton" Style="{StaticResource PlaybackButton}" IsEnabled="False" Click="ForwardFrame_Click" ToolTip="Forward frame" AutomationProperties.Name="Forward frame">
+                            <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="16" Text="&#xE76C;" />
+                        </Button>
+                    </StackPanel>
+                    <Slider x:Name="PlaybackSlider" Margin="12,0,4,0" VerticalAlignment="Center" Minimum="0" Maximum="1"
+                            IsEnabled="False" IsMoveToPointEnabled="True" ValueChanged="PlaybackSlider_ValueChanged"
+                            AutomationProperties.Name="Playback position" />
+                </DockPanel>
+            </Border>
         </Grid>
 
             <GridSplitter x:Name="RowSplitter"

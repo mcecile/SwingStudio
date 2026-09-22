@@ -1,3 +1,6 @@
+using System.IO;
+using System.Text.Json.Serialization;
+
 namespace SwingStudio.Session;
 
 public sealed class SwingSession
@@ -33,5 +36,15 @@ public sealed class SwingSession
 
     public double? ContactMs { get; set; }
 
-    public string FolderPath => AppPaths.SessionFolder(Id);
+    public string? Name { get; set; }
+
+    public bool Saved { get; set; }
+
+    [JsonIgnore]
+    public string? SessionRoot { get; set; }
+
+    [JsonIgnore]
+    public string FolderPath => Path.Combine(
+        string.IsNullOrWhiteSpace(SessionRoot) ? AppPaths.SessionsRoot : SessionRoot,
+        Id.ToString("N"));
 }
