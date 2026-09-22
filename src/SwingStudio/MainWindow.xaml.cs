@@ -293,9 +293,11 @@ public partial class MainWindow : Window
         var stats = isA ? CameraAStats : CameraBStats;
         var path = isA ? _settings.CameraADevicePath : _settings.CameraBDevicePath;
 
+        var gear = isA ? CameraASettings : CameraBSettings;
         preview.Stop();
         image.Source = null;
         stats.Text = "";
+        gear.IsEnabled = false;
 
         if (string.IsNullOrEmpty(path))
         {
@@ -315,7 +317,34 @@ public partial class MainWindow : Window
         picker.Visibility = Visibility.Collapsed;
         message.Text = "";
         stats.Text = "Opening…";
-        preview.Start(camera.Index, _settings.CaptureWidth, _settings.CaptureHeight, _settings.CaptureFramesPerSecond, _settings.CaptureFourCc);
+        gear.IsEnabled = true;
+        _settings.CameraControls.TryGetValue(path, out var controls);
+        preview.Start(camera.Index, _settings.CaptureWidth, _settings.CaptureHeight, _settings.CaptureFramesPerSecond, _settings.CaptureFourCc, controls);
+    }
+
+    private void CameraASettings_Click(object sender, RoutedEventArgs e) => OpenCameraSettings(true);
+
+    private void CameraBSettings_Click(object sender, RoutedEventArgs e) => OpenCameraSettings(false);
+
+    private void OpenCameraSettings(bool isA)
+    {
+        var path = isA ? _settings.CameraADevicePath : _settings.CameraBDevicePath;
+        var preview = isA ? _previewA : _previewB;
+        if (string.IsNullOrEmpty(path))
+        {
+            return;
+        }
+
+        var opened = preview.RequestSettings(values =>
+        {
+            _settings.CameraControls[path] = new Dictionary<string, double>(values);
+            SettingsStore.Save(_settings);
+            StatusDetail.Text = "Camera settings saved.";
+        });
+        if (!opened)
+        {
+            StatusDetail.Text = "The camera is not open.";
+        }
     }
 
     private void ShowFrameA(BitmapSource bitmap, int width, int height, double framesPerSecond) =>

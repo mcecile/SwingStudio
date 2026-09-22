@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
@@ -15,6 +16,14 @@ public sealed class CameraPreview : IDisposable
     private Thread? _thread;
     private int _generation;
     private volatile bool _stop;
+    private volatile bool _showSettings;
+    private Action<IReadOnlyDictionary<string, double>>? _onSettingsSaved;
+    private double _measuredFps;
+    private VideoCapture? _dialogCapture;
+    private Mat? _dialogFrame;
+    private int _dialogGeneration;
+    private TimerProc? _dialogTimer;
+    private nuint _dialogTimerId;
 
     public CameraPreview(Dispatcher dispatcher, Action<BitmapSource, int, int, double> onFrame, Action<string> onError)
     {
@@ -23,17 +32,31 @@ public sealed class CameraPreview : IDisposable
         _onError = onError;
     }
 
-    public void Start(int index, int width, int height, double framesPerSecond, string fourCc)
+    public void Start(int index, int width, int height, double framesPerSecond, string fourCc, IReadOnlyDictionary<string, double>? controls)
     {
         Stop();
         _stop = false;
+        _showSettings = false;
         var generation = Interlocked.Increment(ref _generation);
-        _thread = new Thread(() => CaptureLoop(index, width, height, framesPerSecond, fourCc, generation))
+        _thread = new Thread(() => CaptureLoop(index, width, height, framesPerSecond, fourCc, controls, generation))
         {
             IsBackground = true,
             Name = "CameraPreview"
         };
+        _thread.SetApartmentState(ApartmentState.STA);
         _thread.Start();
+    }
+
+    public bool RequestSettings(Action<IReadOnlyDictionary<string, double>> onSaved)
+    {
+        if (_thread is not { IsAlive: true })
+        {
+            return false;
+        }
+
+        _onSettingsSaved = onSaved;
+        _showSettings = true;
+        return true;
     }
 
     public void Stop()
@@ -46,11 +69,11 @@ public sealed class CameraPreview : IDisposable
 
     public void Dispose() => Stop();
 
-    private void CaptureLoop(int index, int width, int height, double framesPerSecond, string fourCc, int generation)
+    private void CaptureLoop(int index, int width, int height, double framesPerSecond, string fourCc, IReadOnlyDictionary<string, double>? controls, int generation)
     {
         try
         {
-            ReadFrames(index, width, height, framesPerSecond, fourCc, generation);
+            ReadFrames(index, width, height, framesPerSecond, fourCc, controls, generation);
         }
         catch (Exception ex)
         {
@@ -58,7 +81,7 @@ public sealed class CameraPreview : IDisposable
         }
     }
 
-    private void ReadFrames(int index, int width, int height, double framesPerSecond, string fourCc, int generation)
+    private void ReadFrames(int index, int width, int height, double framesPerSecond, string fourCc, IReadOnlyDictionary<string, double>? controls, int generation)
     {
         using var capture = new VideoCapture(index, VideoCaptureAPIs.DSHOW);
         if (!capture.IsOpened())
@@ -73,8 +96,13 @@ public sealed class CameraPreview : IDisposable
         capture.Set(VideoCaptureProperties.Fps, framesPerSecond);
         capture.Set(VideoCaptureProperties.BufferSize, 1);
         capture.Set(VideoCaptureProperties.ConvertRgb, 1);
+        if (controls is not null)
+        {
+            CameraControlStore.Apply(capture, controls);
+        }
 
         using var frame = new Mat();
+        var appliedAfterFrame = false;
         var clock = Stopwatch.StartNew();
         var paintClock = Stopwatch.StartNew();
         var frames = 0;
@@ -82,15 +110,39 @@ public sealed class CameraPreview : IDisposable
 
         while (!_stop && generation == Volatile.Read(ref _generation))
         {
+            if (_showSettings)
+            {
+                _showSettings = false;
+                ShowSettingsDialog(capture, generation);
+                WaitForSettingsDialog(capture, frame, generation);
+                var saved = CameraControlStore.Read(capture);
+                var callback = _onSettingsSaved;
+                appliedAfterFrame = true;
+                _dispatcher.BeginInvoke(() =>
+                {
+                    if (generation == Volatile.Read(ref _generation))
+                    {
+                        callback?.Invoke(saved);
+                    }
+                });
+            }
+
             if (!capture.Read(frame) || frame.Empty())
             {
                 continue;
+            }
+
+            if (!appliedAfterFrame && controls is not null)
+            {
+                CameraControlStore.Apply(capture, controls);
+                appliedAfterFrame = true;
             }
 
             frames++;
             if (clock.ElapsedMilliseconds >= 1000)
             {
                 measuredFps = frames * 1000d / clock.ElapsedMilliseconds;
+                _measuredFps = measuredFps;
                 frames = 0;
                 clock.Restart();
             }
@@ -115,6 +167,37 @@ public sealed class CameraPreview : IDisposable
         }
     }
 
+    private void PublishFrame(VideoCapture? capture, Mat? frame, int generation)
+    {
+        if (capture is null || frame is null || _stop || generation != Volatile.Read(ref _generation))
+        {
+            return;
+        }
+
+        try
+        {
+            if (!capture.Read(frame) || frame.Empty())
+            {
+                return;
+            }
+
+            var bitmap = CopyFrame(frame);
+            var width = frame.Width;
+            var height = frame.Height;
+            var fps = _measuredFps;
+            _dispatcher.BeginInvoke(() =>
+            {
+                if (generation == Volatile.Read(ref _generation))
+                {
+                    _onFrame(bitmap, width, height, fps);
+                }
+            });
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+    }
+
     private static BitmapSource CopyFrame(Mat frame)
     {
         var format = frame.Channels() switch
@@ -130,6 +213,138 @@ public sealed class CameraPreview : IDisposable
         bitmap.Freeze();
         return bitmap;
     }
+
+    private void ShowSettingsDialog(VideoCapture capture, int generation)
+    {
+        _dialogCapture = capture;
+        _dialogFrame = new Mat();
+        _dialogGeneration = generation;
+        _dialogTimer = OnDialogTimer;
+        _dialogTimerId = SetTimer(IntPtr.Zero, 0, 33, _dialogTimer);
+        try
+        {
+            capture.Set(VideoCaptureProperties.Settings, 1);
+        }
+        finally
+        {
+            if (_dialogTimerId != 0)
+            {
+                KillTimer(IntPtr.Zero, _dialogTimerId);
+                _dialogTimerId = 0;
+            }
+
+            _dialogFrame.Dispose();
+            _dialogFrame = null;
+            _dialogCapture = null;
+            _dialogTimer = null;
+        }
+    }
+
+    private void OnDialogTimer(IntPtr hwnd, uint msg, nuint idEvent, uint time)
+    {
+        try
+        {
+            PublishFrame(_dialogCapture, _dialogFrame, _dialogGeneration);
+        }
+        catch (Exception)
+        {
+        }
+    }
+
+    private void WaitForSettingsDialog(VideoCapture capture, Mat frame, int generation)
+    {
+        var started = Stopwatch.StartNew();
+        while (!_stop && started.Elapsed < TimeSpan.FromMilliseconds(600))
+        {
+            if (SettingsDialogOpen())
+            {
+                while (!_stop && SettingsDialogOpen())
+                {
+                    PublishFrame(capture, frame, generation);
+                    Thread.Sleep(33);
+                }
+
+                return;
+            }
+
+            Thread.Sleep(50);
+        }
+
+        if (_stop)
+        {
+            CloseSettingsDialogs();
+        }
+    }
+
+    private static bool SettingsDialogOpen()
+    {
+        var open = false;
+        var processId = (uint)Environment.ProcessId;
+        EnumWindows((hwnd, _) =>
+        {
+            GetWindowThreadProcessId(hwnd, out var windowProcessId);
+            if (windowProcessId != processId || !IsWindowVisible(hwnd))
+            {
+                return true;
+            }
+
+            var title = new StringBuilder(256);
+            GetWindowText(hwnd, title, title.Capacity);
+            if (title.ToString().Contains("Properties", StringComparison.OrdinalIgnoreCase))
+            {
+                open = true;
+            }
+
+            return true;
+        }, IntPtr.Zero);
+        return open;
+    }
+
+    private static void CloseSettingsDialogs()
+    {
+        var processId = (uint)Environment.ProcessId;
+        EnumWindows((hwnd, _) =>
+        {
+            GetWindowThreadProcessId(hwnd, out var windowProcessId);
+            if (windowProcessId == processId && IsWindowVisible(hwnd))
+            {
+                var title = new StringBuilder(256);
+                GetWindowText(hwnd, title, title.Capacity);
+                if (title.ToString().Contains("Properties", StringComparison.OrdinalIgnoreCase))
+                {
+                    PostMessage(hwnd, 0x0010, IntPtr.Zero, IntPtr.Zero);
+                }
+            }
+
+            return true;
+        }, IntPtr.Zero);
+    }
+
+    [UnmanagedFunctionPointer(CallingConvention.Winapi)]
+    private delegate void TimerProc(IntPtr hwnd, uint msg, nuint idEvent, uint time);
+
+    private delegate bool EnumWindowsProc(IntPtr hwnd, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    private static extern nuint SetTimer(IntPtr hwnd, nuint eventId, uint elapsed, TimerProc callback);
+
+    [DllImport("user32.dll")]
+    private static extern bool KillTimer(IntPtr hwnd, nuint eventId);
+
+    [DllImport("user32.dll")]
+    private static extern bool EnumWindows(EnumWindowsProc callback, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint processId);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetWindowText(IntPtr hwnd, StringBuilder text, int count);
+
+    [DllImport("user32.dll")]
+    private static extern bool IsWindowVisible(IntPtr hwnd);
+
+    [DllImport("user32.dll")]
+    private static extern bool PostMessage(IntPtr hwnd, uint message, IntPtr wParam, IntPtr lParam);
 
     private void ReportError(int generation, string message)
     {

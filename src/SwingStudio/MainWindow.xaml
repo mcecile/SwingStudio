@@ -44,6 +44,37 @@
                 </Setter.Value>
             </Setter>
         </Style>
+        <Style x:Key="CameraGearButton" TargetType="Button">
+            <Setter Property="Foreground" Value="#E6E6E6" />
+            <Setter Property="Background" Value="#66000000" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Width" Value="32" />
+            <Setter Property="Height" Value="32" />
+            <Setter Property="HorizontalAlignment" Value="Left" />
+            <Setter Property="VerticalAlignment" Value="Top" />
+            <Setter Property="Margin" Value="8" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="ToolTip" Value="Camera settings" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Chrome" Background="{TemplateBinding Background}" CornerRadius="4">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Chrome" Property="Background" Value="#CC2A2A2A" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Foreground" Value="#6E6E6E" />
+                                <Setter Property="Cursor" Value="Arrow" />
+                                <Setter TargetName="Chrome" Property="Background" Value="#332A2A2A" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </Window.Resources>
     <DockPanel>
         <Border DockPanel.Dock="Bottom" Background="#252526" BorderBrush="#3A3A3A" BorderThickness="0,1,0,0" Padding="12,6">
@@ -123,6 +154,9 @@
                                       SelectionChanged="CameraAList_SelectionChanged" PreviewMouseLeftButtonDown="CameraList_PreviewMouseLeftButtonDown" />
                             <TextBlock x:Name="CameraAMessage" Width="280" Margin="0,8,0,0" TextWrapping="Wrap" TextAlignment="Center" Foreground="#C8C8C8" />
                         </StackPanel>
+                        <Button x:Name="CameraASettings" Style="{StaticResource CameraGearButton}" IsEnabled="False" Click="CameraASettings_Click" AutomationProperties.Name="Camera A settings" Panel.ZIndex="2">
+                            <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="16" Text="&#xE713;" />
+                        </Button>
                     </Grid>
                 </Border>
                 <Canvas x:Name="CameraAOverlay" IsHitTestVisible="False" />
@@ -149,6 +183,9 @@
                                       SelectionChanged="CameraBList_SelectionChanged" PreviewMouseLeftButtonDown="CameraList_PreviewMouseLeftButtonDown" />
                             <TextBlock x:Name="CameraBMessage" Width="280" Margin="0,8,0,0" TextWrapping="Wrap" TextAlignment="Center" Foreground="#C8C8C8" />
                         </StackPanel>
+                        <Button x:Name="CameraBSettings" Style="{StaticResource CameraGearButton}" IsEnabled="False" Click="CameraBSettings_Click" AutomationProperties.Name="Camera B settings" Panel.ZIndex="2">
+                            <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="16" Text="&#xE713;" />
+                        </Button>
                     </Grid>
                 </Border>
                 <Canvas x:Name="CameraBOverlay" IsHitTestVisible="False" />

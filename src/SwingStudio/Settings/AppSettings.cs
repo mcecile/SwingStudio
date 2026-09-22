@@ -28,6 +28,9 @@ public sealed class AppSettings
 
     public string? CameraBFriendlyName { get; set; }
 
+    /// <summary>DirectShow camera controls keyed by device path, then property name.</summary>
+    public Dictionary<string, Dictionary<string, double>> CameraControls { get; set; } = [];
+
     public string? MicrophoneDeviceId { get; set; }
 
     public string? MicrophoneFriendlyName { get; set; }
