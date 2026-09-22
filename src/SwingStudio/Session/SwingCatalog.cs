@@ -54,6 +54,11 @@ public static class SwingCatalog
         return entries.OrderByDescending(entry => entry.StartedAt).ToList();
     }
 
+    private static bool SessionGone(string folder)
+    {
+        return !File.Exists(Path.Combine(folder, SwingSession.ManifestFileName));
+    }
+
     public static void Trim(string? sessionRoot, int keep, params string?[] protectedFolders)
     {
         var unsaved = List(sessionRoot).Where(entry => !entry.Saved).OrderBy(entry => entry.StartedAt).ToList();
@@ -77,9 +82,25 @@ public static class SwingCatalog
             }
             catch (IOException)
             {
+                if (SessionGone(entry.FolderPath))
+                {
+                    overflow--;
+                }
+                else
+                {
+                    break;
+                }
             }
             catch (UnauthorizedAccessException)
             {
+                if (SessionGone(entry.FolderPath))
+                {
+                    overflow--;
+                }
+                else
+                {
+                    break;
+                }
             }
         }
     }
