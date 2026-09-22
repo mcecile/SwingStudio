@@ -1,0 +1,20 @@
+<Window x:Class="SwingStudio.SettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Settings"
+        SizeToContent="WidthAndHeight"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize"
+        Background="#1E1E1E">
+    <StackPanel Margin="20" Width="360">
+        <TextBlock Text="Camera A" Foreground="#C8C8C8" Margin="0,0,0,6" />
+        <ComboBox x:Name="CameraAList" Margin="0,0,0,16" />
+        <TextBlock Text="Camera B" Foreground="#C8C8C8" Margin="0,0,0,6" />
+        <ComboBox x:Name="CameraBList" Margin="0,0,0,12" />
+        <TextBlock Text="Trigger and capture timing will be edited here." Foreground="#7A7A7A" TextWrapping="Wrap" Margin="0,0,0,20" />
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button Content="Cancel" Width="88" Margin="0,0,8,0" IsCancel="True" />
+            <Button Content="OK" Width="88" IsDefault="True" Click="Ok_Click" />
+        </StackPanel>
+    </StackPanel>
+</Window>
