@@ -6,6 +6,7 @@
         SizeToContent="Height"
         WindowStartupLocation="CenterOwner"
         ResizeMode="NoResize"
+        Icon="Assets/SwingStudio.ico"
         Background="#1E1E1E"
         Loaded="Window_Loaded">
     <StackPanel Margin="20">
