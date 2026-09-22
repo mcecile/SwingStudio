@@ -49,7 +49,7 @@ public static class ContactTime
 
         var threshold = peak * 0.2f;
         var onset = peakIndex;
-        while (onset > 0 && envelope[onset] > threshold)
+        while (onset > 0 && envelope[onset - 1] > threshold)
         {
             onset--;
         }

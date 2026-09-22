@@ -39,6 +39,7 @@ public partial class MainWindow : Window
     private bool _suppressSelection;
     private bool _suppressMicrophone;
     private bool _closing;
+    private readonly object _strikeGate = new();
     private volatile bool _strikeActive;
     private volatile bool _saving;
     private bool _playing;
@@ -356,9 +357,12 @@ public partial class MainWindow : Window
             }
 
             var now = _clock.ElapsedMilliseconds;
-            _strikeStartMs = now;
-            _strikeEndMs = now + Math.Max(0.1, _settings.SecondsAfterImpact) * 1000;
-            _strikeActive = true;
+            lock (_strikeGate)
+            {
+                _strikeStartMs = now;
+                _strikeEndMs = now + Math.Max(0.1, _settings.SecondsAfterImpact) * 1000;
+                _strikeActive = true;
+            }
             StatusDetail.Text = StrikeStatus;
         }
 
@@ -367,12 +371,18 @@ public partial class MainWindow : Window
 
     private double RetentionSeconds()
     {
-        if (!_strikeActive)
+        double strikeStartMs;
+        lock (_strikeGate)
         {
-            return _settings.SecondsBeforeImpact;
+            if (!_strikeActive)
+            {
+                return _settings.SecondsBeforeImpact;
+            }
+
+            strikeStartMs = _strikeStartMs;
         }
 
-        var elapsed = (_clock.ElapsedMilliseconds - _strikeStartMs) / 1000;
+        var elapsed = (_clock.ElapsedMilliseconds - strikeStartMs) / 1000;
         return _settings.SecondsBeforeImpact + Math.Max(0, elapsed);
     }
 
@@ -383,9 +393,17 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (_strikeActive)
+        double strikeEndMs;
+        bool strikeActive;
+        lock (_strikeGate)
         {
-            if (_clock.ElapsedMilliseconds < _strikeEndMs)
+            strikeActive = _strikeActive;
+            strikeEndMs = _strikeEndMs;
+        }
+
+        if (strikeActive)
+        {
+            if (_clock.ElapsedMilliseconds < strikeEndMs)
             {
                 return;
             }
@@ -429,9 +447,17 @@ public partial class MainWindow : Window
 
     private void BeginSave()
     {
-        var windowStart = _strikeStartMs - Math.Max(0.1, _settings.SecondsBeforeImpact) * 1000;
-        var windowEnd = _strikeEndMs;
-        var triggerMs = _strikeStartMs - windowStart;
+        double strikeStartMs;
+        double strikeEndMs;
+        lock (_strikeGate)
+        {
+            strikeStartMs = _strikeStartMs;
+            strikeEndMs = _strikeEndMs;
+        }
+
+        var windowStart = strikeStartMs - Math.Max(0.1, _settings.SecondsBeforeImpact) * 1000;
+        var windowEnd = strikeEndMs;
+        var triggerMs = strikeStartMs - windowStart;
         var offsetMs = _settings.ContactOffsetMs;
         var keep = NormalizedSwingsToKeep();
         var sessionRoot = _settings.SessionFolder;
@@ -454,7 +480,11 @@ public partial class MainWindow : Window
             SessionRoot = _settings.SessionFolder
         };
 
-        _strikeActive = false;
+        lock (_strikeGate)
+        {
+            _strikeActive = false;
+        }
+
         _saving = true;
         StatusDetail.Text = "Saving swing…";
         Task.Run(() =>
