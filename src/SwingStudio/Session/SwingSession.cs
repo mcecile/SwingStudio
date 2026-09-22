@@ -40,6 +40,8 @@ public sealed class SwingSession
 
     public bool Saved { get; set; }
 
+    public List<SwingStroke> Drawings { get; set; } = [];
+
     [JsonIgnore]
     public string? SessionRoot { get; set; }
 

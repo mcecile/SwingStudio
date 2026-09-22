@@ -78,6 +78,9 @@ public partial class MainWindow : Window
         _bufferTimer.Tick += (_, _) => ShowBufferStatus();
         _bufferTimer.Start();
         _playbackTimer.Tick += (_, _) => AdvancePlayback();
+        CameraADraw.SizeChanged += (_, _) => RedrawDrawings();
+        CameraBDraw.SizeChanged += (_, _) => RedrawDrawings();
+        UpdateDrawButtons();
         PlaybackSlider.AddHandler(
             UIElement.PreviewMouseLeftButtonDownEvent,
             new System.Windows.Input.MouseButtonEventHandler((_, _) => _scrubbing = true),
@@ -339,7 +342,7 @@ public partial class MainWindow : Window
 
         MicrophoneLevel.Value = level;
         var below = level < _settings.TriggerThreshold;
-        if (_strikeActive || _saving || _playing)
+        if (_strikeActive || _saving || _playing || _drawTool is not null)
         {
             _levelWasBelow = below;
             return;
@@ -472,6 +475,7 @@ public partial class MainWindow : Window
 
                     _lastTakeFolder = session.FolderPath;
                     _loadedFolder = session.FolderPath;
+                    LoadDrawings();
                     RefreshSwingList();
                     StartPlayback(framesA, framesB, windowStart, session.ContactMs ?? triggerMs);
                 });
@@ -587,6 +591,7 @@ public partial class MainWindow : Window
 
                     _loadedFolder = folder;
                     _lastTakeFolder = folder;
+                    LoadDrawings();
                     _saving = false;
                     PauseAtStart();
                 });
@@ -658,6 +663,7 @@ public partial class MainWindow : Window
             return;
         }
 
+        ExitDrawMode();
         ResumePlayback(fromStart: !_showingTake);
     }
 
@@ -836,6 +842,7 @@ public partial class MainWindow : Window
     {
         ShowPlaybackPane(_playbackA, CameraAImage, CameraAOverlay, _contactA, ref _shownA, ref _contactHoldA);
         ShowPlaybackPane(_playbackB, CameraBImage, CameraBOverlay, _contactB, ref _shownB, ref _contactHoldB);
+        RedrawDrawings();
     }
 
     private void ShowPlaybackPane(
@@ -882,6 +889,8 @@ public partial class MainWindow : Window
         _contactHoldB = 0;
         SetContactLine(CameraAOverlay, false);
         SetContactLine(CameraBOverlay, false);
+        ExitDrawMode();
+        RedrawDrawings();
         _saving = false;
         if (!_closing && (StatusDetail.Text.StartsWith("Replay ", StringComparison.Ordinal) || StatusDetail.Text == PausedStatus))
         {
@@ -953,6 +962,7 @@ public partial class MainWindow : Window
         ForwardFrameButton.IsEnabled = hasTake;
         PlayPauseButton.IsEnabled = hasTake;
         PlaybackSlider.IsEnabled = hasTake;
+        UpdateDrawButtons();
         PlayPauseIcon.Text = _playing ? "\uE103" : "\uE102";
         var playLabel = _playing ? "Pause" : "Play";
         PlayPauseButton.ToolTip = playLabel;

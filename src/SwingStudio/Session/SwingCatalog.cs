@@ -92,6 +92,13 @@ public static class SwingCatalog
         WriteSession(folder, session);
     }
 
+    public static void SaveDrawings(string folder, IReadOnlyList<SwingStroke> drawings)
+    {
+        var session = ReadSession(folder) ?? throw new IOException("This swing could not be read.");
+        session.Drawings = drawings.ToList();
+        WriteSession(folder, session);
+    }
+
     public static SwingSession? ReadSession(string folder)
     {
         var manifest = Path.Combine(folder, SwingSession.ManifestFileName);

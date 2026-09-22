@@ -75,6 +75,25 @@
                 </Setter.Value>
             </Setter>
         </Style>
+        <Style x:Key="DrawSwatch" TargetType="Button">
+            <Setter Property="Width" Value="22" />
+            <Setter Property="Height" Value="22" />
+            <Setter Property="Margin" Value="0,3,0,0" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Ellipse Width="16" Height="16" Fill="{TemplateBinding Background}" Stroke="{TemplateBinding BorderBrush}" StrokeThickness="2" />
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="DrawToolButton" TargetType="Button" BasedOn="{StaticResource CameraGearButton}">
+            <Setter Property="Margin" Value="0,4,0,0" />
+            <Setter Property="HorizontalAlignment" Value="Left" />
+            <Setter Property="VerticalAlignment" Value="Top" />
+        </Style>
         <Style x:Key="PlaybackButton" TargetType="Button">
             <Setter Property="Foreground" Value="#E6E6E6" />
             <Setter Property="Background" Value="Transparent" />
@@ -193,9 +212,31 @@
                         <Button x:Name="CameraASettings" Style="{StaticResource CameraGearButton}" IsEnabled="False" Click="CameraASettings_Click" AutomationProperties.Name="Camera A settings" Panel.ZIndex="2">
                             <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="16" Text="&#xE713;" />
                         </Button>
+                        <Canvas x:Name="CameraADraw" Background="Transparent" IsHitTestVisible="False" Panel.ZIndex="1"
+                                MouseLeftButtonDown="Draw_MouseDown" MouseMove="Draw_MouseMove" MouseLeftButtonUp="Draw_MouseUp" />
                     </Grid>
                 </Border>
                 <Canvas x:Name="CameraAOverlay" IsHitTestVisible="False" />
+                <StackPanel x:Name="CameraATools" Margin="8,48,0,0" HorizontalAlignment="Left" VerticalAlignment="Top" Panel.ZIndex="3">
+                    <StackPanel x:Name="CameraAColors">
+                        <Button Style="{StaticResource DrawSwatch}" Background="#FFE08A" Tag="#FFE08A" Click="DrawColor_Click" ToolTip="Yellow" AutomationProperties.Name="Camera A yellow" />
+                        <Button Style="{StaticResource DrawSwatch}" Background="#FFFFFF" Tag="#FFFFFF" Click="DrawColor_Click" ToolTip="White" AutomationProperties.Name="Camera A white" />
+                        <Button Style="{StaticResource DrawSwatch}" Background="#FF5A5A" Tag="#FF5A5A" Click="DrawColor_Click" ToolTip="Red" AutomationProperties.Name="Camera A red" />
+                        <Button Style="{StaticResource DrawSwatch}" Background="#5AC8FF" Tag="#5AC8FF" Click="DrawColor_Click" ToolTip="Cyan" AutomationProperties.Name="Camera A cyan" />
+                    </StackPanel>
+                    <Button x:Name="CameraACircle" Style="{StaticResource DrawToolButton}" Tag="circle" Click="DrawTool_Click" ToolTip="Circle" AutomationProperties.Name="Camera A circle">
+                        <Ellipse Width="14" Height="14" Stroke="White" StrokeThickness="1.5" />
+                    </Button>
+                    <Button x:Name="CameraALine" Style="{StaticResource DrawToolButton}" Tag="line" Click="DrawTool_Click" ToolTip="Line" AutomationProperties.Name="Camera A line">
+                        <Path Stroke="White" StrokeThickness="1.5" Data="M2,14 L14,2" />
+                    </Button>
+                    <Button x:Name="CameraAAngle" Style="{StaticResource DrawToolButton}" Tag="angle" Click="DrawTool_Click" ToolTip="Angle" AutomationProperties.Name="Camera A angle">
+                        <Path Stroke="White" StrokeThickness="1.5" StrokeLineJoin="Round" Data="M2,14 L8,2 L15,12" />
+                    </Button>
+                    <Button x:Name="CameraAUndo" Style="{StaticResource DrawToolButton}" Click="DrawUndo_Click" ToolTip="Undo" AutomationProperties.Name="Camera A undo">
+                        <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="14" Text="&#xE7A7;" />
+                    </Button>
+                </StackPanel>
             </Grid>
 
             <GridSplitter x:Name="PaneSplitter"
@@ -222,9 +263,31 @@
                         <Button x:Name="CameraBSettings" Style="{StaticResource CameraGearButton}" IsEnabled="False" Click="CameraBSettings_Click" AutomationProperties.Name="Camera B settings" Panel.ZIndex="2">
                             <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="16" Text="&#xE713;" />
                         </Button>
+                        <Canvas x:Name="CameraBDraw" Background="Transparent" IsHitTestVisible="False" Panel.ZIndex="1"
+                                MouseLeftButtonDown="Draw_MouseDown" MouseMove="Draw_MouseMove" MouseLeftButtonUp="Draw_MouseUp" />
                     </Grid>
                 </Border>
                 <Canvas x:Name="CameraBOverlay" IsHitTestVisible="False" />
+                <StackPanel x:Name="CameraBTools" Margin="8,48,0,0" HorizontalAlignment="Left" VerticalAlignment="Top" Panel.ZIndex="3">
+                    <StackPanel x:Name="CameraBColors">
+                        <Button Style="{StaticResource DrawSwatch}" Background="#FFE08A" Tag="#FFE08A" Click="DrawColor_Click" ToolTip="Yellow" AutomationProperties.Name="Camera B yellow" />
+                        <Button Style="{StaticResource DrawSwatch}" Background="#FFFFFF" Tag="#FFFFFF" Click="DrawColor_Click" ToolTip="White" AutomationProperties.Name="Camera B white" />
+                        <Button Style="{StaticResource DrawSwatch}" Background="#FF5A5A" Tag="#FF5A5A" Click="DrawColor_Click" ToolTip="Red" AutomationProperties.Name="Camera B red" />
+                        <Button Style="{StaticResource DrawSwatch}" Background="#5AC8FF" Tag="#5AC8FF" Click="DrawColor_Click" ToolTip="Cyan" AutomationProperties.Name="Camera B cyan" />
+                    </StackPanel>
+                    <Button x:Name="CameraBCircle" Style="{StaticResource DrawToolButton}" Tag="circle" Click="DrawTool_Click" ToolTip="Circle" AutomationProperties.Name="Camera B circle">
+                        <Ellipse Width="14" Height="14" Stroke="White" StrokeThickness="1.5" />
+                    </Button>
+                    <Button x:Name="CameraBLine" Style="{StaticResource DrawToolButton}" Tag="line" Click="DrawTool_Click" ToolTip="Line" AutomationProperties.Name="Camera B line">
+                        <Path Stroke="White" StrokeThickness="1.5" Data="M2,14 L14,2" />
+                    </Button>
+                    <Button x:Name="CameraBAngle" Style="{StaticResource DrawToolButton}" Tag="angle" Click="DrawTool_Click" ToolTip="Angle" AutomationProperties.Name="Camera B angle">
+                        <Path Stroke="White" StrokeThickness="1.5" StrokeLineJoin="Round" Data="M2,14 L8,2 L15,12" />
+                    </Button>
+                    <Button x:Name="CameraBUndo" Style="{StaticResource DrawToolButton}" Click="DrawUndo_Click" ToolTip="Undo" AutomationProperties.Name="Camera B undo">
+                        <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="14" Text="&#xE7A7;" />
+                    </Button>
+                </StackPanel>
             </Grid>
         </Grid>
             <Border Grid.Row="1" Margin="0,8,0,0" Padding="8,4" Background="#2A2A2A" BorderBrush="#3A3A3A" BorderThickness="1" CornerRadius="4">
