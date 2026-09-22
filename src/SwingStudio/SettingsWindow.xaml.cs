@@ -1,6 +1,10 @@
+using System.Globalization;
+using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using Microsoft.Win32;
 using SwingStudio.Capture;
+using SwingStudio.Session;
 using SwingStudio.Settings;
 
 namespace SwingStudio;
@@ -8,48 +12,166 @@ namespace SwingStudio;
 public partial class SettingsWindow : Window
 {
     private readonly AppSettings _settings;
-    private readonly IReadOnlyList<CameraDevice> _cameras;
 
-    public SettingsWindow(AppSettings settings, IReadOnlyList<CameraDevice> cameras)
+    public SettingsWindow(AppSettings settings)
     {
         _settings = settings;
-        _cameras = cameras;
         InitializeComponent();
-        Fill(CameraAList, settings.CameraADevicePath);
-        Fill(CameraBList, settings.CameraBDevicePath);
-    }
+        ThresholdSlider.Value = Math.Clamp(settings.TriggerThreshold, 0, 100);
+        SecondsBefore.Text = settings.SecondsBeforeImpact.ToString("0.0", CultureInfo.InvariantCulture);
+        SecondsAfter.Text = settings.SecondsAfterImpact.ToString("0.0", CultureInfo.InvariantCulture);
+        SessionFolder.Text = settings.SessionFolder;
+        TriggerOffset.Text = settings.ContactOffsetMs.ToString(CultureInfo.InvariantCulture);
 
-    private void Fill(ComboBox list, string? selectedPath)
-    {
-        list.Items.Add(new CameraChoice(null, "(None)"));
-        foreach (var camera in _cameras)
+        var offered = CameraModeLister.Recall(settings.CameraADevicePath).ToList();
+        var cameraReportedModes = offered.Count > 0;
+        var selected = offered.FirstOrDefault(mode => mode.Matches(
+            settings.CaptureWidth,
+            settings.CaptureHeight,
+            settings.CaptureFramesPerSecond,
+            settings.CaptureFourCc));
+        if (selected is null)
         {
-            list.Items.Add(new CameraChoice(camera.DevicePath, camera.Name));
+            selected = new CaptureMode
+            {
+                Width = settings.CaptureWidth,
+                Height = settings.CaptureHeight,
+                FramesPerSecond = settings.CaptureFramesPerSecond,
+                FourCc = settings.CaptureFourCc,
+                IsSavedRequest = cameraReportedModes
+            };
+            offered.Insert(0, selected);
         }
 
-        list.SelectedItem = list.Items.Cast<CameraChoice>().FirstOrDefault(choice => choice.DevicePath == selectedPath)
-            ?? list.Items[0];
+        CaptureModeList.ItemsSource = offered;
+        CaptureModeList.SelectedItem = selected;
+        CaptureModeHint.Text = CaptureModeNote(settings, cameraReportedModes);
+    }
+
+    private static string CaptureModeNote(AppSettings settings, bool cameraReportedModes)
+    {
+        if (string.IsNullOrEmpty(settings.CameraADevicePath))
+        {
+            return "Assign Camera A to list its modes. Both cameras use the mode you pick.";
+        }
+
+        var name = string.IsNullOrEmpty(settings.CameraAFriendlyName) ? "Camera A" : settings.CameraAFriendlyName;
+        return cameraReportedModes
+            ? $"Modes from {name}. Both cameras use the mode you pick."
+            : $"{name} has not reported its modes yet. Both cameras use the mode you pick.";
+    }
+
+    private void ThresholdSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (ThresholdValue is null)
+        {
+            return;
+        }
+
+        ThresholdValue.Text = ((int)Math.Round(e.NewValue)).ToString(CultureInfo.InvariantCulture);
+    }
+
+    private void Browse_Click(object sender, RoutedEventArgs e)
+    {
+        var current = SessionFolder.Text.Trim();
+        var dialog = new OpenFolderDialog
+        {
+            Title = "Session folder",
+            InitialDirectory = Directory.Exists(current)
+                ? current
+                : Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments)
+        };
+        if (dialog.ShowDialog() == true)
+        {
+            SessionFolder.Text = dialog.FolderName;
+        }
     }
 
     private void Ok_Click(object sender, RoutedEventArgs e)
     {
-        var cameraA = (CameraChoice)CameraAList.SelectedItem;
-        var cameraB = (CameraChoice)CameraBList.SelectedItem;
-        if (cameraA.DevicePath is not null && cameraA.DevicePath == cameraB.DevicePath)
+        if (!TryReadSeconds(SecondsBefore.Text, out var before))
         {
-            MessageBox.Show(this, "Choose a different camera for each pane.", "Settings", MessageBoxButton.OK, MessageBoxImage.Information);
+            ShowInvalid("Seconds before impact must be between 0.1 and 10.");
             return;
         }
 
-        _settings.CameraADevicePath = cameraA.DevicePath;
-        _settings.CameraAFriendlyName = cameraA.DevicePath is null ? null : cameraA.Name;
-        _settings.CameraBDevicePath = cameraB.DevicePath;
-        _settings.CameraBFriendlyName = cameraB.DevicePath is null ? null : cameraB.Name;
+        if (!TryReadSeconds(SecondsAfter.Text, out var after))
+        {
+            ShowInvalid("Seconds after impact must be between 0.1 and 10.");
+            return;
+        }
+
+        var offsetText = TriggerOffset.Text.Trim();
+        var offsetParsed = int.TryParse(offsetText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var offset)
+            || int.TryParse(offsetText, NumberStyles.Integer, CultureInfo.CurrentCulture, out offset);
+        if (!offsetParsed || offset is < -2000 or > 2000)
+        {
+            ShowInvalid("Trigger offset must be a whole number of milliseconds from -2000 to 2000.");
+            return;
+        }
+
+        if (CaptureModeList.SelectedItem is not CaptureMode mode)
+        {
+            ShowInvalid("Choose a capture mode.");
+            return;
+        }
+
+        string folder;
+        try
+        {
+            folder = Path.GetFullPath(SessionFolder.Text.Trim());
+            Directory.CreateDirectory(folder);
+        }
+        catch (Exception ex)
+        {
+            ShowInvalid(ex.Message);
+            return;
+        }
+
+        _settings.TriggerThreshold = (int)Math.Round(ThresholdSlider.Value);
+        _settings.SecondsBeforeImpact = before;
+        _settings.SecondsAfterImpact = after;
+        _settings.CaptureWidth = mode.Width;
+        _settings.CaptureHeight = mode.Height;
+        _settings.CaptureFramesPerSecond = mode.FramesPerSecond;
+        _settings.CaptureFourCc = mode.FourCc;
+        _settings.SessionFolder = folder;
+        _settings.ContactOffsetMs = offset;
         DialogResult = true;
     }
 
-    private sealed record CameraChoice(string? DevicePath, string Name)
+    private void SecondsBeforeUp_Click(object sender, RoutedEventArgs e) => StepSeconds(SecondsBefore, 0.1);
+
+    private void SecondsBeforeDown_Click(object sender, RoutedEventArgs e) => StepSeconds(SecondsBefore, -0.1);
+
+    private void SecondsAfterUp_Click(object sender, RoutedEventArgs e) => StepSeconds(SecondsAfter, 0.1);
+
+    private void SecondsAfterDown_Click(object sender, RoutedEventArgs e) => StepSeconds(SecondsAfter, -0.1);
+
+    private static void StepSeconds(TextBox box, double delta)
     {
-        public override string ToString() => Name;
+        var trimmed = box.Text.Trim();
+        var parsed = double.TryParse(trimmed, NumberStyles.Float, CultureInfo.InvariantCulture, out var seconds)
+            || double.TryParse(trimmed, NumberStyles.Float, CultureInfo.CurrentCulture, out seconds);
+        if (!parsed)
+        {
+            seconds = 1;
+        }
+
+        seconds = Math.Clamp(Math.Round(seconds + delta, 1, MidpointRounding.AwayFromZero), 0.1, 10);
+        box.Text = seconds.ToString("0.0", CultureInfo.InvariantCulture);
+    }
+
+    private static bool TryReadSeconds(string text, out double seconds)
+    {
+        var trimmed = text.Trim();
+        var parsed = double.TryParse(trimmed, NumberStyles.Float, CultureInfo.InvariantCulture, out seconds)
+            || double.TryParse(trimmed, NumberStyles.Float, CultureInfo.CurrentCulture, out seconds);
+        return parsed && seconds is >= 0.1 and <= 10;
+    }
+
+    private void ShowInvalid(string message)
+    {
+        MessageBox.Show(this, message, "Settings", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 }

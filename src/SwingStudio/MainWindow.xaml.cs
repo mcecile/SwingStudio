@@ -207,12 +207,22 @@ public partial class MainWindow : Window
 
     private void Settings_Click(object sender, RoutedEventArgs e)
     {
-        var dialog = new SettingsWindow(_settings, CameraEnumerator.List()) { Owner = this };
-        if (dialog.ShowDialog() == true)
+        var width = _settings.CaptureWidth;
+        var height = _settings.CaptureHeight;
+        var framesPerSecond = _settings.CaptureFramesPerSecond;
+        var fourCc = _settings.CaptureFourCc;
+        var dialog = new SettingsWindow(_settings) { Owner = this };
+        if (dialog.ShowDialog() != true)
         {
-            SettingsStore.Save(_settings);
-            ShowMicrophone();
-            RefreshCameras();
+            return;
+        }
+
+        SettingsStore.Save(_settings);
+        if (width != _settings.CaptureWidth
+            || height != _settings.CaptureHeight
+            || Math.Abs(framesPerSecond - _settings.CaptureFramesPerSecond) > 0.1
+            || !string.Equals(fourCc, _settings.CaptureFourCc, StringComparison.OrdinalIgnoreCase))
+        {
             ApplyPane(true);
             ApplyPane(false);
         }
@@ -318,6 +328,18 @@ public partial class MainWindow : Window
         message.Text = "";
         stats.Text = "Opening…";
         gear.IsEnabled = true;
+        if (isA)
+        {
+            try
+            {
+                CameraModeLister.Remember(path, CameraModeLister.List(path));
+            }
+            catch (Exception)
+            {
+                CameraModeLister.Remember(path, []);
+            }
+        }
+
         _settings.CameraControls.TryGetValue(path, out var controls);
         preview.Start(camera.Index, _settings.CaptureWidth, _settings.CaptureHeight, _settings.CaptureFramesPerSecond, _settings.CaptureFourCc, controls);
     }
