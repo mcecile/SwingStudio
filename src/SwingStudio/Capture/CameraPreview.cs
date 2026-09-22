@@ -33,14 +33,14 @@ public sealed class CameraPreview : IDisposable
         _onError = onError;
     }
 
-    public void Start(int index, int width, int height, double framesPerSecond, string fourCc, IReadOnlyDictionary<string, double>? controls, Action<Mat>? onCaptured = null)
+    public void Start(int index, int width, int height, double framesPerSecond, string fourCc, string? devicePath, IReadOnlyDictionary<string, double>? controls, Action<Mat>? onCaptured = null)
     {
         Stop();
         _stop = false;
         _showSettings = false;
         _onCaptured = onCaptured;
         var generation = Interlocked.Increment(ref _generation);
-        _thread = new Thread(() => CaptureLoop(index, width, height, framesPerSecond, fourCc, controls, generation))
+        _thread = new Thread(() => CaptureLoop(index, width, height, framesPerSecond, fourCc, devicePath, controls, generation))
         {
             IsBackground = true,
             Name = "CameraPreview"
@@ -71,11 +71,11 @@ public sealed class CameraPreview : IDisposable
 
     public void Dispose() => Stop();
 
-    private void CaptureLoop(int index, int width, int height, double framesPerSecond, string fourCc, IReadOnlyDictionary<string, double>? controls, int generation)
+    private void CaptureLoop(int index, int width, int height, double framesPerSecond, string fourCc, string? devicePath, IReadOnlyDictionary<string, double>? controls, int generation)
     {
         try
         {
-            ReadFrames(index, width, height, framesPerSecond, fourCc, controls, generation);
+            ReadFrames(index, width, height, framesPerSecond, fourCc, devicePath, controls, generation);
         }
         catch (Exception ex)
         {
@@ -83,7 +83,7 @@ public sealed class CameraPreview : IDisposable
         }
     }
 
-    private void ReadFrames(int index, int width, int height, double framesPerSecond, string fourCc, IReadOnlyDictionary<string, double>? controls, int generation)
+    private void ReadFrames(int index, int width, int height, double framesPerSecond, string fourCc, string? devicePath, IReadOnlyDictionary<string, double>? controls, int generation)
     {
         using var capture = new VideoCapture(index, VideoCaptureAPIs.DSHOW);
         if (!capture.IsOpened())
@@ -100,7 +100,7 @@ public sealed class CameraPreview : IDisposable
         capture.Set(VideoCaptureProperties.ConvertRgb, 1);
         if (controls is not null)
         {
-            CameraControlStore.Apply(capture, controls);
+            CameraControlStore.Apply(capture, devicePath, controls);
         }
 
         using var frame = new Mat();
@@ -117,7 +117,7 @@ public sealed class CameraPreview : IDisposable
                 _showSettings = false;
                 ShowSettingsDialog(capture, generation);
                 WaitForSettingsDialog(capture, frame, generation);
-                var saved = CameraControlStore.Read(capture);
+                var saved = CameraControlStore.Read(capture, devicePath);
                 var callback = _onSettingsSaved;
                 appliedAfterFrame = true;
                 _dispatcher.BeginInvoke(() =>
@@ -138,7 +138,7 @@ public sealed class CameraPreview : IDisposable
 
             if (!appliedAfterFrame && controls is not null)
             {
-                CameraControlStore.Apply(capture, controls);
+                CameraControlStore.Apply(capture, devicePath, controls);
                 appliedAfterFrame = true;
             }
 

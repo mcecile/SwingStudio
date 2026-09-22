@@ -1273,15 +1273,18 @@ public partial class MainWindow : Window
         var path = isA ? _settings.CameraADevicePath : _settings.CameraBDevicePath;
 
         var gear = isA ? CameraASettings : CameraBSettings;
+        var tools = isA ? CameraATools : CameraBTools;
         var ring = isA ? _framesA : _framesB;
         preview.Stop();
         ring.Clear();
         image.Source = null;
         stats.Text = "";
         gear.IsEnabled = false;
+        tools.Visibility = Visibility.Collapsed;
 
         if (string.IsNullOrEmpty(path))
         {
+            LeaveDrawMode(isA);
             picker.Visibility = Visibility.Visible;
             message.Text = _cameras.Count == 0 ? "No cameras found." : "";
             return;
@@ -1290,6 +1293,7 @@ public partial class MainWindow : Window
         var camera = _cameras.FirstOrDefault(item => item.DevicePath == path);
         if (camera is null)
         {
+            LeaveDrawMode(isA);
             picker.Visibility = Visibility.Visible;
             message.Text = "Saved camera was not found.";
             return;
@@ -1299,6 +1303,7 @@ public partial class MainWindow : Window
         message.Text = "";
         stats.Text = "Opening…";
         gear.IsEnabled = true;
+        tools.Visibility = Visibility.Visible;
         if (isA)
         {
             try
@@ -1312,10 +1317,18 @@ public partial class MainWindow : Window
         }
 
         _settings.CameraControls.TryGetValue(path, out var controls);
-        preview.Start(camera.Index, _settings.CaptureWidth, _settings.CaptureHeight, _settings.CaptureFramesPerSecond, _settings.CaptureFourCc, controls, frame =>
+        preview.Start(camera.Index, _settings.CaptureWidth, _settings.CaptureHeight, _settings.CaptureFramesPerSecond, _settings.CaptureFourCc, path, controls, frame =>
         {
             ring.Add(_clock.ElapsedMilliseconds, frame, RetentionSeconds());
         });
+    }
+
+    private void LeaveDrawMode(bool isA)
+    {
+        if (_drawTool is not null && _drawOnA == isA)
+        {
+            ExitDrawMode();
+        }
     }
 
     private void CameraASettings_Click(object sender, RoutedEventArgs e) => OpenCameraSettings(true);
