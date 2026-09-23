@@ -459,6 +459,7 @@ public partial class MainWindow : Window
         var windowEnd = strikeEndMs;
         var triggerMs = strikeStartMs - windowStart;
         var offsetMs = _settings.ContactOffsetMs;
+        var triggerThreshold = _settings.TriggerThreshold;
         var keep = NormalizedSwingsToKeep();
         var sessionRoot = _settings.SessionFolder;
         var framesA = _framesA.Slice(windowStart, windowEnd);
@@ -491,7 +492,7 @@ public partial class MainWindow : Window
         {
             try
             {
-                TakeWriter.Write(session, framesA, framesB, audio, windowStart, triggerMs, offsetMs);
+                TakeWriter.Write(session, framesA, framesB, audio, windowStart, triggerMs, offsetMs, triggerThreshold);
                 SwingCatalog.Trim(sessionRoot, keep, session.FolderPath, _namingFolder);
                 Dispatcher.BeginInvoke(() =>
                 {
