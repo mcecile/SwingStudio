@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using NAudio.CoreAudioApi;
 using NAudio.Wave;
 
@@ -32,9 +33,18 @@ public sealed class MicrophoneLevelMeter : IDisposable
         {
             enumerator = new MMDeviceEnumerator();
             device = enumerator.GetDevice(deviceId);
-            recorder = new WasapiRecorderBuilder().WithDevice(device).WithSharedMode().Build();
-            recorder.DataAvailable += (buffer, _, _, _) => OnData(generation, buffer);
-            recorder.StartRecording();
+            var raw = true;
+            try
+            {
+                recorder = StartRecorder(device, generation, raw);
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or COMException)
+            {
+                Log.Warn($"Microphone {device.FriendlyName} does not support a raw stream, so Windows audio enhancements stay on: {ex.Message}");
+                raw = false;
+                recorder = StartRecorder(device, generation, raw);
+            }
+
             lock (_gate)
             {
                 if (generation != _generation)
@@ -46,7 +56,7 @@ public sealed class MicrophoneLevelMeter : IDisposable
                 }
 
                 _format = recorder.WaveFormat;
-                Log.Info($"Microphone started: {device.FriendlyName}, {_format.SampleRate} Hz, {_format.Channels} channel(s), {_format.BitsPerSample}-bit {_format.Encoding}.");
+                Log.Info($"Microphone started: {device.FriendlyName}, {_format.SampleRate} Hz, {_format.Channels} channel(s), {_format.BitsPerSample}-bit {_format.Encoding}, {(raw ? "raw" : "processed")}.");
                 _enumerator = enumerator;
                 _device = device;
                 _recorder = recorder;
@@ -89,6 +99,28 @@ public sealed class MicrophoneLevelMeter : IDisposable
     }
 
     public void Dispose() => Stop();
+
+    private WasapiRecorder StartRecorder(MMDevice device, int generation, bool raw)
+    {
+        var builder = new WasapiRecorderBuilder().WithDevice(device).WithSharedMode();
+        if (raw)
+        {
+            builder = builder.WithRawMode();
+        }
+
+        var recorder = builder.Build();
+        try
+        {
+            recorder.DataAvailable += (buffer, _, _, _) => OnData(generation, buffer);
+            recorder.StartRecording();
+            return recorder;
+        }
+        catch
+        {
+            recorder.Dispose();
+            throw;
+        }
+    }
 
     public static double PeakLevel(ReadOnlySpan<byte> buffer, WaveFormat format)
     {
