@@ -325,7 +325,7 @@
                           Background="#3A3A3A"
                           DragCompleted="PaneSplitter_DragCompleted" />
 
-            <Grid Grid.Row="2">
+            <Grid x:Name="PressurePanel" Grid.Row="2">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition x:Name="FootMapColumn" Width="*" MinWidth="140" />
                     <ColumnDefinition Width="Auto" />

@@ -69,6 +69,8 @@ public partial class MainWindow : Window
     private double _strikeStartMs;
     private double _strikeEndMs;
     private bool _levelWasBelow = true;
+    private volatile Action<byte[], NAudio.Wave.WaveFormat>? _audioTap;
+    private bool _calibrating;
 
     public MainWindow()
     {
@@ -126,9 +128,20 @@ public partial class MainWindow : Window
         LeftPaneColumn.Width = new GridLength(share, GridUnitType.Star);
         RightPaneColumn.Width = new GridLength(1 - share, GridUnitType.Star);
 
-        var cameraRowShare = Math.Clamp(_settings.CameraRowShare, MinPaneShare, MaxPaneShare);
-        CameraRow.Height = new GridLength(cameraRowShare, GridUnitType.Star);
-        PressureRow.Height = new GridLength(1 - cameraRowShare, GridUnitType.Star);
+        if (string.IsNullOrWhiteSpace(_settings.PressurePlatePort))
+        {
+            RowSplitter.Visibility = Visibility.Collapsed;
+            PressurePanel.Visibility = Visibility.Collapsed;
+            PressureRow.MinHeight = 0;
+            PressureRow.Height = new GridLength(0);
+            CameraRow.Height = new GridLength(1, GridUnitType.Star);
+        }
+        else
+        {
+            var cameraRowShare = Math.Clamp(_settings.CameraRowShare, MinPaneShare, MaxPaneShare);
+            CameraRow.Height = new GridLength(cameraRowShare, GridUnitType.Star);
+            PressureRow.Height = new GridLength(1 - cameraRowShare, GridUnitType.Star);
+        }
 
         var pressureShare = Math.Clamp(_settings.PressurePaneShare, MinPaneShare, MaxPaneShare);
         FootMapColumn.Width = new GridLength(pressureShare, GridUnitType.Star);
@@ -325,6 +338,7 @@ public partial class MainWindow : Window
                     ? 0
                     : data.Length / (double)format.BlockAlign / format.SampleRate * 1000;
                 _audio.Add(_clock.ElapsedMilliseconds - durationMs, data, format, RetentionSeconds());
+                _audioTap?.Invoke(data, format);
             });
             SetMicrophoneStatus(null);
         }
@@ -347,7 +361,7 @@ public partial class MainWindow : Window
 
         MicrophoneLevel.Value = level;
         var below = level < _settings.TriggerThreshold;
-        if (_strikeActive || _saving || _playing || _drawTool is not null)
+        if (_calibrating || _strikeActive || _saving || _playing || _drawTool is not null)
         {
             _levelWasBelow = below;
             return;
@@ -1190,7 +1204,12 @@ public partial class MainWindow : Window
         var height = _settings.CaptureHeight;
         var framesPerSecond = _settings.CaptureFramesPerSecond;
         var fourCc = _settings.CaptureFourCc;
-        var dialog = new SettingsWindow(_settings) { Owner = this };
+        var microphone = string.IsNullOrEmpty(_levelMeter.DeviceId) ? null : (MicrophoneList.SelectedItem as MicrophoneChoice)?.Name;
+        var calibration = new CalibrationHost(
+            microphone,
+            tap => _audioTap = tap,
+            on => _calibrating = on);
+        var dialog = new SettingsWindow(_settings, calibration) { Owner = this };
         if (dialog.ShowDialog() != true)
         {
             return;

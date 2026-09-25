@@ -13,11 +13,15 @@ namespace SwingStudio;
 public partial class SettingsWindow : Window
 {
     private readonly AppSettings _settings;
+    private readonly CalibrationHost? _calibration;
 
-    public SettingsWindow(AppSettings settings)
+    public SettingsWindow(AppSettings settings, CalibrationHost? calibration = null)
     {
         _settings = settings;
+        _calibration = calibration;
         InitializeComponent();
+        CalibrateButton.IsEnabled = calibration?.HasMicrophone == true;
+        CalibrateHint.Text = CalibrateButton.IsEnabled ? "3 swings with the mic in place" : "Choose a working microphone first.";
         ThresholdSlider.Value = Math.Clamp(settings.TriggerThreshold, 0, 100);
         SecondsBefore.Text = settings.SecondsBeforeImpact.ToString("0.0", CultureInfo.InvariantCulture);
         SecondsAfter.Text = settings.SecondsAfterImpact.ToString("0.0", CultureInfo.InvariantCulture);
@@ -86,6 +90,21 @@ public partial class SettingsWindow : Window
         if (dialog.ShowDialog() == true)
         {
             SessionFolder.Text = dialog.FolderName;
+        }
+    }
+
+    private void Calibrate_Click(object sender, RoutedEventArgs e)
+    {
+        if (_calibration is not { HasMicrophone: true })
+        {
+            return;
+        }
+
+        var folder = SessionFolder.Text.Trim();
+        var window = new CalibrationWindow(_calibration, _settings, string.IsNullOrEmpty(folder) ? _settings.SessionFolder : folder) { Owner = this };
+        if (window.ShowDialog() == true && window.ProposedThreshold is int threshold)
+        {
+            ThresholdSlider.Value = threshold;
         }
     }
 

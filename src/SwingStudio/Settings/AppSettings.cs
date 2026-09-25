@@ -61,4 +61,7 @@ public sealed class AppSettings
     public int SwingsToKeep { get; set; } = 10;
 
     public int ContactOffsetMs { get; set; }
+
+    /// <summary>Serial port of the pressure plate. The foot map and weight transfer panes stay hidden until it is set.</summary>
+    public string? PressurePlatePort { get; set; }
 }

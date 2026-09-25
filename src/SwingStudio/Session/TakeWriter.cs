@@ -218,6 +218,18 @@ public static class TakeWriter
         return pcm;
     }
 
+    internal static float[] ToFloat(byte[] data, WaveFormat format)
+    {
+        var bytesPerSample = Math.Max(1, format.BitsPerSample / 8);
+        var samples = new float[data.Length / bytesPerSample];
+        for (var i = 0; i < samples.Length; i++)
+        {
+            samples[i] = ReadSample(data, i * bytesPerSample, format);
+        }
+
+        return samples;
+    }
+
     private static float ReadSample(byte[] data, int offset, WaveFormat format)
     {
         if (offset < 0 || offset >= data.Length)
