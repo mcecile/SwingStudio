@@ -22,6 +22,7 @@ public static class ContactTime
         var onset = OnsetSample(samples, sampleRate, triggerIndex, levelThreshold);
         if (onset < 0)
         {
+            Log.Warn($"No recorded sample reached threshold {threshold:0} near the trigger; contact uses the trigger time.");
             return Clamp(fallback, takeLengthMs);
         }
 

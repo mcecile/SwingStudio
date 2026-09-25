@@ -123,9 +123,12 @@
             </StackPanel>
         </Grid>
 
-        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-            <Button Content="Cancel" Width="88" Margin="0,0,8,0" IsCancel="True" />
-            <Button Content="OK" Width="88" IsDefault="True" Click="Ok_Click" />
-        </StackPanel>
+        <DockPanel>
+            <Button DockPanel.Dock="Left" Content="Open log folder" Padding="12,0" Click="OpenLogFolder_Click" AutomationProperties.Name="Open log folder" />
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                <Button Content="Cancel" Width="88" Margin="0,0,8,0" IsCancel="True" />
+                <Button Content="OK" Width="88" IsDefault="True" Click="Ok_Click" />
+            </StackPanel>
+        </DockPanel>
     </StackPanel>
 </Window>

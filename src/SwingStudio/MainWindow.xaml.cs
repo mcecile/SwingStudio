@@ -74,8 +74,9 @@ public partial class MainWindow : Window
     {
         _settings = SettingsStore.Load();
         InitializeComponent();
-        _previewA = new CameraPreview(Dispatcher, ShowFrameA, message => ShowPreviewError(true, message));
-        _previewB = new CameraPreview(Dispatcher, ShowFrameB, message => ShowPreviewError(false, message));
+        Log.Info($"Settings: session folder {_settings.SessionFolder}, keep {NormalizedSwingsToKeep()} unsaved, capture {_settings.CaptureWidth}x{_settings.CaptureHeight} {_settings.CaptureFramesPerSecond:0.##} fps {_settings.CaptureFourCc}, threshold {_settings.TriggerThreshold}, offset {_settings.ContactOffsetMs} ms, window {_settings.SecondsBeforeImpact:0.0} s before / {_settings.SecondsAfterImpact:0.0} s after.");
+        _previewA = new CameraPreview("Camera A", Dispatcher, ShowFrameA, message => ShowPreviewError(true, message));
+        _previewB = new CameraPreview("Camera B", Dispatcher, ShowFrameB, message => ShowPreviewError(false, message));
         _bufferTimer.Tick += (_, _) => ShowBufferStatus();
         _bufferTimer.Start();
         _playbackTimer.Tick += (_, _) => AdvancePlayback();
@@ -215,9 +216,11 @@ public partial class MainWindow : Window
             }
 
             SwingCatalog.SaveName(folder, dialog.SwingName);
+            Log.Info($"Saved swing {System.IO.Path.GetFileName(folder)} as \"{dialog.SwingName}\".");
         }
         catch (Exception ex)
         {
+            Log.Error($"Could not name swing {folder}.", ex);
             StatusDetail.Text = ex.Message;
             return;
         }
@@ -325,8 +328,9 @@ public partial class MainWindow : Window
             });
             SetMicrophoneStatus(null);
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            Log.Error($"Microphone {choice?.Name} ({deviceId}) could not start.", ex);
             _levelMeter.Stop();
             _audio.Clear();
             MicrophoneLevel.Value = 0;
@@ -363,6 +367,7 @@ public partial class MainWindow : Window
                 _strikeEndMs = now + Math.Max(0.1, _settings.SecondsAfterImpact) * 1000;
                 _strikeActive = true;
             }
+            Log.Info($"Strike: level {level:0} crossed threshold {_settings.TriggerThreshold}.");
             StatusDetail.Text = StrikeStatus;
         }
 
@@ -488,11 +493,14 @@ public partial class MainWindow : Window
 
         _saving = true;
         StatusDetail.Text = "Saving swing…";
+        Log.Info($"Saving take: {framesA.Frames.Count} Camera A frames, {framesB.Frames.Count} Camera B frames, {audio.Packets.Count} audio packets, {(windowEnd - windowStart) / 1000:0.00} s window.");
         Task.Run(() =>
         {
             try
             {
+                var timer = Stopwatch.StartNew();
                 TakeWriter.Write(session, framesA, framesB, audio, windowStart, triggerMs, offsetMs, triggerThreshold);
+                Log.Info($"Saved take {System.IO.Path.GetFileName(session.FolderPath)} in {timer.ElapsedMilliseconds} ms: contact {session.ContactMs:0.0} ms, trigger {triggerMs:0.0} ms, offset {offsetMs} ms.");
                 SwingCatalog.Trim(sessionRoot, keep, session.FolderPath, _namingFolder);
                 Dispatcher.BeginInvoke(() =>
                 {
@@ -513,6 +521,7 @@ public partial class MainWindow : Window
             }
             catch (Exception ex)
             {
+                Log.Error($"Saving take {session.FolderPath} failed.", ex);
                 framesA.Dispose();
                 framesB.Dispose();
                 Dispatcher.BeginInvoke(() =>
@@ -614,6 +623,7 @@ public partial class MainWindow : Window
 
                     if (!HoldFrames(loaded.CameraA, loaded.CameraB, 0, loaded.ContactMs))
                     {
+                        Log.Warn($"Swing {folder} has no video.");
                         _saving = false;
                         StatusDetail.Text = "This swing has no video.";
                         RefreshSwingList();
@@ -629,6 +639,7 @@ public partial class MainWindow : Window
             }
             catch (Exception ex)
             {
+                Log.Error($"Opening swing {folder} failed.", ex);
                 Dispatcher.BeginInvoke(() =>
                 {
                     _saving = false;
@@ -1186,6 +1197,7 @@ public partial class MainWindow : Window
         }
 
         SettingsStore.Save(_settings);
+        Log.Info($"Settings changed: session folder {_settings.SessionFolder}, keep {NormalizedSwingsToKeep()} unsaved, capture {_settings.CaptureWidth}x{_settings.CaptureHeight} {_settings.CaptureFramesPerSecond:0.##} fps {_settings.CaptureFourCc}, threshold {_settings.TriggerThreshold}, offset {_settings.ContactOffsetMs} ms, window {_settings.SecondsBeforeImpact:0.0} s before / {_settings.SecondsAfterImpact:0.0} s after.");
         SwingCatalog.Trim(_settings.SessionFolder, NormalizedSwingsToKeep(), _loadedFolder);
         RefreshSwingList();
         if (width != _settings.CaptureWidth
@@ -1291,9 +1303,11 @@ public partial class MainWindow : Window
             return;
         }
 
+        var label = isA ? "Camera A" : "Camera B";
         var camera = _cameras.FirstOrDefault(item => item.DevicePath == path);
         if (camera is null)
         {
+            Log.Warn($"{label} saved camera was not found ({(isA ? _settings.CameraAFriendlyName : _settings.CameraBFriendlyName)}, {path}). {_cameras.Count} camera(s) connected: {string.Join(", ", _cameras.Select(item => item.Name))}.");
             LeaveDrawMode(isA);
             picker.Visibility = Visibility.Visible;
             message.Text = "Saved camera was not found.";
@@ -1311,13 +1325,15 @@ public partial class MainWindow : Window
             {
                 CameraModeLister.Remember(path, CameraModeLister.List(path));
             }
-            catch (Exception)
+            catch (Exception ex)
             {
+                Log.Warn($"Camera A did not list its capture modes.", ex);
                 CameraModeLister.Remember(path, []);
             }
         }
 
         _settings.CameraControls.TryGetValue(path, out var controls);
+        Log.Info($"{label} opening {camera.Name} (DirectShow index {camera.Index}), requesting {_settings.CaptureWidth}x{_settings.CaptureHeight} {_settings.CaptureFramesPerSecond:0.##} fps {_settings.CaptureFourCc}, {controls?.Count ?? 0} saved control value(s).");
         preview.Start(camera.Index, _settings.CaptureWidth, _settings.CaptureHeight, _settings.CaptureFramesPerSecond, _settings.CaptureFourCc, path, controls, frame =>
         {
             ring.Add(_clock.ElapsedMilliseconds, frame, RetentionSeconds());
@@ -1349,6 +1365,7 @@ public partial class MainWindow : Window
         {
             _settings.CameraControls[path] = new Dictionary<string, double>(values);
             SettingsStore.Save(_settings);
+            Log.Info($"{(isA ? "Camera A" : "Camera B")} settings dialog closed; saved {string.Join(", ", values.OrderBy(pair => pair.Key).Select(pair => $"{pair.Key}={pair.Value:0.##}"))}.");
             StatusDetail.Text = "Camera settings saved.";
         });
         if (!opened)

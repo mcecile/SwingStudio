@@ -78,27 +78,19 @@ public static class SwingCatalog
             try
             {
                 Directory.Delete(entry.FolderPath, true);
+                Log.Info($"Removed old unsaved swing {entry.Label} ({entry.FolderPath}).");
                 overflow--;
             }
-            catch (IOException)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
                 if (SessionGone(entry.FolderPath))
                 {
+                    Log.Warn($"Old unsaved swing {entry.Label} ({entry.FolderPath}) was removed but its folder could not be deleted.", ex);
                     overflow--;
                 }
                 else
                 {
-                    break;
-                }
-            }
-            catch (UnauthorizedAccessException)
-            {
-                if (SessionGone(entry.FolderPath))
-                {
-                    overflow--;
-                }
-                else
-                {
+                    Log.Warn($"Could not remove old unsaved swing {entry.Label} ({entry.FolderPath}); cleanup stopped.", ex);
                     break;
                 }
             }
@@ -132,8 +124,14 @@ public static class SwingCatalog
         {
             return JsonSerializer.Deserialize<SwingSession>(File.ReadAllText(manifest), JsonOptions);
         }
-        catch (JsonException)
+        catch (JsonException ex)
         {
+            Log.Warn($"Could not read {manifest}; the swing is skipped.", ex);
+            return null;
+        }
+        catch (IOException ex)
+        {
+            Log.Warn($"Could not read {manifest}; the swing is skipped.", ex);
             return null;
         }
     }

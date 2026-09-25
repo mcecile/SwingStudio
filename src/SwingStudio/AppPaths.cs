@@ -10,6 +10,11 @@ public static class AppPaths
 
     public static string SettingsFile { get; } = Path.Combine(SettingsDirectory, "settings.json");
 
+    public static string LogDirectory { get; } = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "SwingStudio",
+        "logs");
+
     public static string SessionsRoot { get; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
         "SwingStudio",

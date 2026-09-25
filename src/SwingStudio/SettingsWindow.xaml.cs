@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Windows;
@@ -85,6 +86,20 @@ public partial class SettingsWindow : Window
         if (dialog.ShowDialog() == true)
         {
             SessionFolder.Text = dialog.FolderName;
+        }
+    }
+
+    private void OpenLogFolder_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            Directory.CreateDirectory(AppPaths.LogDirectory);
+            Process.Start(new ProcessStartInfo("explorer.exe", $"\"{AppPaths.LogDirectory}\"") { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            Log.Warn("The log folder could not be opened.", ex);
+            ShowInvalid(ex.Message);
         }
     }
 

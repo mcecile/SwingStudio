@@ -232,12 +232,9 @@ public static class CameraControlStore
                     moniker.BindToObject(bindContext, null, ref filterId, out bound);
                     return action(bound as IAMCameraControl, bound as IAMVideoProcAmp);
                 }
-                catch (COMException)
+                catch (Exception ex) when (ex is COMException or InvalidCastException)
                 {
-                    return false;
-                }
-                catch (InvalidCastException)
-                {
+                    Log.Warn("Camera controls could not be reached through DirectShow; falling back to OpenCV properties.", ex);
                     return false;
                 }
                 finally
@@ -251,12 +248,9 @@ public static class CameraControlStore
                 }
             }
         }
-        catch (COMException)
+        catch (Exception ex) when (ex is COMException or InvalidCastException)
         {
-            return false;
-        }
-        catch (InvalidCastException)
-        {
+            Log.Warn("Camera devices could not be listed for camera controls; falling back to OpenCV properties.", ex);
             return false;
         }
         finally

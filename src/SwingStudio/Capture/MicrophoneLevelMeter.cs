@@ -46,6 +46,7 @@ public sealed class MicrophoneLevelMeter : IDisposable
                 }
 
                 _format = recorder.WaveFormat;
+                Log.Info($"Microphone started: {device.FriendlyName}, {_format.SampleRate} Hz, {_format.Channels} channel(s), {_format.BitsPerSample}-bit {_format.Encoding}.");
                 _enumerator = enumerator;
                 _device = device;
                 _recorder = recorder;

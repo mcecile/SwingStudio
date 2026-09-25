@@ -13,6 +13,7 @@ public sealed class CameraPreview : IDisposable
     private readonly Dispatcher _dispatcher;
     private readonly Action<BitmapSource, int, int, double> _onFrame;
     private readonly Action<string> _onError;
+    private readonly string _label;
     private Thread? _thread;
     private int _generation;
     private volatile bool _stop;
@@ -25,9 +26,11 @@ public sealed class CameraPreview : IDisposable
     private int _dialogGeneration;
     private TimerProc? _dialogTimer;
     private nuint _dialogTimerId;
+    private bool _dialogErrorLogged;
 
-    public CameraPreview(Dispatcher dispatcher, Action<BitmapSource, int, int, double> onFrame, Action<string> onError)
+    public CameraPreview(string label, Dispatcher dispatcher, Action<BitmapSource, int, int, double> onFrame, Action<string> onError)
     {
+        _label = label;
         _dispatcher = dispatcher;
         _onFrame = onFrame;
         _onError = onError;
@@ -79,6 +82,7 @@ public sealed class CameraPreview : IDisposable
         }
         catch (Exception ex)
         {
+            Log.Error($"{_label} capture stopped with an error.", ex);
             ReportError(generation, ex.Message);
         }
     }
@@ -88,6 +92,7 @@ public sealed class CameraPreview : IDisposable
         using var capture = new VideoCapture(index, VideoCaptureAPIs.DSHOW);
         if (!capture.IsOpened())
         {
+            Log.Error($"{_label} did not open (DirectShow index {index}).");
             ReportError(generation, "The camera did not open.");
             return;
         }
@@ -109,6 +114,9 @@ public sealed class CameraPreview : IDisposable
         var paintClock = Stopwatch.StartNew();
         var frames = 0;
         var measuredFps = 0d;
+        var firstFrameLogged = false;
+        var loggedFps = 0d;
+        var fpsLogClock = Stopwatch.StartNew();
 
         while (!_stop && generation == Volatile.Read(ref _generation))
         {
@@ -136,6 +144,12 @@ public sealed class CameraPreview : IDisposable
 
             _onCaptured?.Invoke(frame);
 
+            if (!firstFrameLogged)
+            {
+                firstFrameLogged = true;
+                Log.Info($"{_label} first frame {frame.Width}x{frame.Height}, {frame.Channels()} channel(s); driver reports {capture.Get(VideoCaptureProperties.Fps):0.##} fps, FourCC {FourCcText(capture.Get(VideoCaptureProperties.FourCC))}.");
+            }
+
             if (!appliedAfterFrame && controls is not null)
             {
                 CameraControlStore.Apply(capture, devicePath, controls);
@@ -149,6 +163,12 @@ public sealed class CameraPreview : IDisposable
                 _measuredFps = measuredFps;
                 frames = 0;
                 clock.Restart();
+                if (loggedFps <= 0 || (Math.Abs(measuredFps - loggedFps) > loggedFps * 0.25 && fpsLogClock.Elapsed > TimeSpan.FromSeconds(10)))
+                {
+                    Log.Info($"{_label} measured {measuredFps:0.0} fps (requested {framesPerSecond:0.##}).");
+                    loggedFps = measuredFps;
+                    fpsLogClock.Restart();
+                }
             }
 
             if (paintClock.ElapsedMilliseconds < 33)
@@ -225,6 +245,7 @@ public sealed class CameraPreview : IDisposable
         _dialogFrame = new Mat();
         _dialogGeneration = generation;
         _dialogTimer = OnDialogTimer;
+        _dialogErrorLogged = false;
         _dialogTimerId = SetTimer(IntPtr.Zero, 0, 33, _dialogTimer);
         try
         {
@@ -251,9 +272,26 @@ public sealed class CameraPreview : IDisposable
         {
             PublishFrame(_dialogCapture, _dialogFrame, _dialogGeneration);
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            if (!_dialogErrorLogged)
+            {
+                _dialogErrorLogged = true;
+                Log.Warn($"{_label} frame update failed while the settings dialog was open.", ex);
+            }
         }
+    }
+
+    private static string FourCcText(double value)
+    {
+        var code = (int)value;
+        if (code <= 0)
+        {
+            return "unknown";
+        }
+
+        var chars = new[] { (char)(code & 0xFF), (char)((code >> 8) & 0xFF), (char)((code >> 16) & 0xFF), (char)((code >> 24) & 0xFF) };
+        return chars.All(c => c >= 32 && c < 127) ? new string(chars) : code.ToString(System.Globalization.CultureInfo.InvariantCulture);
     }
 
     private void WaitForSettingsDialog(VideoCapture capture, Mat frame, int generation)

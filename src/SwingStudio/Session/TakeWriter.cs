@@ -37,6 +37,7 @@ public static class TakeWriter
     {
         if (audio.Format is not WaveFormat format || audio.Packets.Count == 0)
         {
+            Log.Warn("The take has no audio; contact uses the trigger time.");
             session.ContactMs = Math.Clamp(triggerMs + offsetMs, 0, Math.Max(0, takeLengthMs));
             return;
         }
@@ -108,12 +109,18 @@ public static class TakeWriter
             var writer = new VideoWriter(path, FourCC.FromString(fourCc), fps, size);
             if (writer.IsOpened())
             {
+                if (fourCc != "mp4v")
+                {
+                    Log.Warn($"{Path.GetFileName(path)} is written with {fourCc} because mp4v did not open.");
+                }
+
                 return writer;
             }
 
             writer.Dispose();
         }
 
+        Log.Error($"No video codec opened for {path} ({width}x{height}, {fps:0.##} fps).");
         throw new IOException("The camera video could not be opened for writing.");
     }
 

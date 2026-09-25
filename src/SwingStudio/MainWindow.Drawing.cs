@@ -236,6 +236,7 @@ public partial class MainWindow
         }
         catch (Exception ex)
         {
+            Log.Error($"Saving drawings to {_loadedFolder} failed.", ex);
             StatusDetail.Text = ex.Message;
         }
     }
