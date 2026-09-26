@@ -22,10 +22,15 @@ public partial class MainWindow : Window
     private const string MicrophoneUnavailableStatus = "The microphone is not available.";
     private const string StrikeStatus = "Strike";
     private const string PausedStatus = "Paused";
+    private const string WatchingLaunchMonitorStatus = "Watching ProTee VX Labs.";
+    private const string NpcapMissingStatus = "Npcap is not installed.";
+    private const string LaunchMonitorAdapterStatus = "ProTee VX Labs adapter not found.";
+    private const string LaunchMonitorOpenStatus = "Could not open the ProTee VX Labs adapter.";
 
     private readonly CameraPreview _previewA;
     private readonly CameraPreview _previewB;
     private readonly MicrophoneLevelMeter _levelMeter = new();
+    private readonly LaunchMonitorWatcher _launchMonitor = new();
     private readonly MonitorClock _clock = new();
     private readonly FrameRing _framesA = new();
     private readonly FrameRing _framesB = new();
@@ -66,12 +71,15 @@ public partial class MainWindow : Window
     private volatile Action<byte[], NAudio.Wave.WaveFormat>? _audioTap;
     private double _audioClockMs;
     private bool _calibrating;
+    private string? _launchMonitorStatus;
+
+    private bool IsLaunchMonitor => TriggerSources.IsLaunchMonitor(_settings.TriggerSource);
 
     public MainWindow()
     {
         _settings = SettingsStore.Load();
         InitializeComponent();
-        Log.Info($"Settings: session folder {_settings.SessionFolder}, keep {NormalizedSwingsToKeep()} unsaved, capture {_settings.CaptureWidth}x{_settings.CaptureHeight} {_settings.CaptureFramesPerSecond:0.##} fps {_settings.CaptureFourCc}, threshold {_settings.TriggerThreshold}, window {_settings.SecondsBeforeImpact:0.0} s before / {_settings.SecondsAfterImpact:0.0} s after.");
+        Log.Info($"Settings: session folder {_settings.SessionFolder}, keep {NormalizedSwingsToKeep()} unsaved, capture {_settings.CaptureWidth}x{_settings.CaptureHeight} {_settings.CaptureFramesPerSecond:0.##} fps {_settings.CaptureFourCc}, trigger {TriggerSources.Normalize(_settings.TriggerSource)}, threshold {_settings.TriggerThreshold}, window {_settings.SecondsBeforeImpact:0.0} s before / {_settings.SecondsAfterImpact:0.0} s after.");
         _previewA = new CameraPreview("Camera A", Dispatcher, ShowFrameA, message => ShowPreviewError(true, message));
         _previewB = new CameraPreview("Camera B", Dispatcher, ShowFrameB, message => ShowPreviewError(false, message));
         _bufferTimer.Tick += (_, _) => ShowBufferStatus();
@@ -91,6 +99,7 @@ public partial class MainWindow : Window
         PlaybackSlider.LostMouseCapture += (_, _) => _scrubbing = false;
         ShowTransport();
         ShowMicrophone();
+        ApplyTriggerSource();
         RestoreLayout();
         RefreshCameras();
         ApplyPane(true);
@@ -102,6 +111,7 @@ public partial class MainWindow : Window
             _bufferTimer.Stop();
             _playbackTimer.Stop();
             _closing = true;
+            _launchMonitor.Dispose();
             EndPlayback();
             _playbackA?.Dispose();
             _playbackB?.Dispose();
@@ -358,7 +368,7 @@ public partial class MainWindow : Window
 
         MicrophoneLevel.Value = level;
         var below = level < _settings.TriggerThreshold;
-        if (_calibrating || _strikeActive || _saving || _playing || _drawTool is not null)
+        if (_calibrating || IsLaunchMonitor || _strikeActive || _saving || _drawTool is not null)
         {
             _levelWasBelow = below;
             return;
@@ -366,28 +376,79 @@ public partial class MainWindow : Window
 
         if (_levelWasBelow && !below)
         {
-            if (_showingTake)
-            {
-                EndPlayback();
-            }
-
             var now = _audioClockMs;
             if (now <= 0)
             {
                 now = _clock.ElapsedMilliseconds;
             }
 
-            lock (_strikeGate)
-            {
-                _strikeStartMs = now;
-                _strikeEndMs = now + Math.Max(0.1, _settings.SecondsAfterImpact) * 1000;
-                _strikeActive = true;
-            }
-            Log.Info($"Strike: level {level:0} crossed threshold {_settings.TriggerThreshold}.");
-            StatusDetail.Text = StrikeStatus;
+            ArmStrike(now, $"level {level:0} crossed threshold {_settings.TriggerThreshold}.");
         }
 
         _levelWasBelow = below;
+    }
+
+    private void ArmStrike(double nowMs, string reason)
+    {
+        if (_closing || _calibrating || _strikeActive || _saving || _drawTool is not null)
+        {
+            return;
+        }
+
+        if (_showingTake)
+        {
+            EndPlayback();
+        }
+
+        if (nowMs <= 0)
+        {
+            nowMs = _clock.ElapsedMilliseconds;
+        }
+
+        lock (_strikeGate)
+        {
+            _strikeStartMs = nowMs;
+            _strikeEndMs = nowMs + Math.Max(0.1, _settings.SecondsAfterImpact) * 1000;
+            _strikeActive = true;
+        }
+
+        Log.Info($"Strike: {reason}");
+        StatusDetail.Text = StrikeStatus;
+    }
+
+    private void ApplyTriggerSource()
+    {
+        _launchMonitor.Stop();
+        if (!IsLaunchMonitor)
+        {
+            _launchMonitorStatus = null;
+            if (IsLaunchMonitorStatus(StatusDetail.Text))
+            {
+                StatusDetail.Text = "";
+            }
+
+            if (string.IsNullOrEmpty(_levelMeter.DeviceId))
+            {
+                SetMicrophoneStatus(ChooseMicrophoneStatus);
+            }
+            else
+            {
+                SetMicrophoneStatus(null);
+            }
+
+            return;
+        }
+
+        var state = _launchMonitor.Start(() =>
+        {
+            var seenAt = _clock.ElapsedMilliseconds;
+            Dispatcher.BeginInvoke(() => ArmStrike(seenAt, "ProTee VX Labs shotTrigger."));
+        });
+        _launchMonitorStatus = StatusFor(state);
+        if (!IsBusyStatus(StatusDetail.Text))
+        {
+            StatusDetail.Text = _launchMonitorStatus;
+        }
     }
 
     private double RetentionSeconds()
@@ -410,6 +471,11 @@ public partial class MainWindow : Window
     private void ShowBufferStatus()
     {
         if (_closing || StatusDetail.Text is ChooseMicrophoneStatus or MicrophoneUnavailableStatus)
+        {
+            return;
+        }
+
+        if (_launchMonitorStatus is not null && _launchMonitorStatus != WatchingLaunchMonitorStatus)
         {
             return;
         }
@@ -454,11 +520,18 @@ public partial class MainWindow : Window
                 StatusDetail.Text = "";
             }
 
+            ShowLaunchMonitorIdle();
             return;
         }
 
-        if (StatusDetail.Text.Length > 0 && !IsBufferStatus(StatusDetail.Text))
+        if (StatusDetail.Text.Length > 0 && !IsBufferStatus(StatusDetail.Text) && StatusDetail.Text != WatchingLaunchMonitorStatus)
         {
+            return;
+        }
+
+        if (_launchMonitorStatus == WatchingLaunchMonitorStatus)
+        {
+            StatusDetail.Text = WatchingLaunchMonitorStatus;
             return;
         }
 
@@ -920,7 +993,7 @@ public partial class MainWindow : Window
         _saving = false;
         if (!_closing && (StatusDetail.Text.StartsWith("Replay ", StringComparison.Ordinal) || StatusDetail.Text == PausedStatus))
         {
-            StatusDetail.Text = "";
+            StatusDetail.Text = _launchMonitorStatus ?? "";
         }
 
         ShowPlaybackControls();
@@ -1057,8 +1130,38 @@ public partial class MainWindow : Window
 
     private static bool IsBufferStatus(string text) => text.StartsWith("Buffer ", StringComparison.Ordinal);
 
+    private static bool IsLaunchMonitorStatus(string text) =>
+        text is WatchingLaunchMonitorStatus or NpcapMissingStatus or LaunchMonitorAdapterStatus or LaunchMonitorOpenStatus;
+
+    private static bool IsBusyStatus(string text) =>
+        text is StrikeStatus or PausedStatus
+        || text.StartsWith("Replay ", StringComparison.Ordinal)
+        || text.StartsWith("Saving ", StringComparison.Ordinal);
+
+    private static string StatusFor(LaunchMonitorWatchState state) => state switch
+    {
+        LaunchMonitorWatchState.Watching => WatchingLaunchMonitorStatus,
+        LaunchMonitorWatchState.NpcapMissing => NpcapMissingStatus,
+        LaunchMonitorWatchState.AdapterNotFound => LaunchMonitorAdapterStatus,
+        _ => LaunchMonitorOpenStatus
+    };
+
+    private void ShowLaunchMonitorIdle()
+    {
+        if (_launchMonitorStatus == WatchingLaunchMonitorStatus
+            && (StatusDetail.Text.Length == 0 || IsBufferStatus(StatusDetail.Text)))
+        {
+            StatusDetail.Text = WatchingLaunchMonitorStatus;
+        }
+    }
+
     private void SetMicrophoneStatus(string? message)
     {
+        if (IsLaunchMonitor)
+        {
+            return;
+        }
+
         if (message is not null)
         {
             StatusDetail.Text = message;
@@ -1128,7 +1231,8 @@ public partial class MainWindow : Window
         }
 
         SettingsStore.Save(_settings);
-        Log.Info($"Settings changed: session folder {_settings.SessionFolder}, keep {NormalizedSwingsToKeep()} unsaved, capture {_settings.CaptureWidth}x{_settings.CaptureHeight} {_settings.CaptureFramesPerSecond:0.##} fps {_settings.CaptureFourCc}, threshold {_settings.TriggerThreshold}, window {_settings.SecondsBeforeImpact:0.0} s before / {_settings.SecondsAfterImpact:0.0} s after.");
+        Log.Info($"Settings changed: session folder {_settings.SessionFolder}, keep {NormalizedSwingsToKeep()} unsaved, capture {_settings.CaptureWidth}x{_settings.CaptureHeight} {_settings.CaptureFramesPerSecond:0.##} fps {_settings.CaptureFourCc}, trigger {TriggerSources.Normalize(_settings.TriggerSource)}, threshold {_settings.TriggerThreshold}, window {_settings.SecondsBeforeImpact:0.0} s before / {_settings.SecondsAfterImpact:0.0} s after.");
+        ApplyTriggerSource();
         SwingCatalog.Trim(_settings.SessionFolder, NormalizedSwingsToKeep(), _loadedFolder);
         RefreshSwingList();
         if (width != _settings.CaptureWidth

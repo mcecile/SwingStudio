@@ -42,6 +42,14 @@
     </Window.Resources>
     <StackPanel Margin="20">
         <StackPanel Margin="0,0,0,16">
+            <TextBlock Text="Trigger" Foreground="#C8C8C8" Margin="0,0,0,6" />
+            <ComboBox x:Name="TriggerSourceList" AutomationProperties.Name="Trigger" SelectionChanged="TriggerSourceList_SelectionChanged">
+                <ComboBoxItem Content="Microphone" Tag="Microphone" />
+                <ComboBoxItem Content="ProTee VX Labs" Tag="LaunchMonitor" />
+            </ComboBox>
+        </StackPanel>
+
+        <StackPanel Margin="0,0,0,16">
             <TextBlock Text="Trigger threshold (above 2 kHz)" Foreground="#C8C8C8" Margin="0,0,0,6" />
             <Grid>
                 <Grid.ColumnDefinitions>

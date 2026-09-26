@@ -35,6 +35,9 @@ public sealed class AppSettings
 
     public string? MicrophoneFriendlyName { get; set; }
 
+    /// <summary>Microphone or LaunchMonitor. Microphone is used when the value is missing or unrecognized.</summary>
+    public string TriggerSource { get; set; } = TriggerSources.Microphone;
+
     public int TriggerThreshold { get; set; } = 50;
 
     public double SecondsBeforeImpact { get; set; } = 1.0;

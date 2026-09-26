@@ -20,9 +20,8 @@ public partial class SettingsWindow : Window
         _settings = settings;
         _calibration = calibration;
         InitializeComponent();
-        CalibrateButton.IsEnabled = calibration?.HasMicrophone == true;
-        CalibrateHint.Text = CalibrateButton.IsEnabled ? "3 swings; listens above 2 kHz" : "Choose a working microphone first.";
         ThresholdSlider.Value = Math.Clamp(settings.TriggerThreshold, 0, 100);
+        SelectTrigger(TriggerSources.Normalize(settings.TriggerSource));
         SecondsBefore.Text = settings.SecondsBeforeImpact.ToString("0.0", CultureInfo.InvariantCulture);
         SecondsAfter.Text = settings.SecondsAfterImpact.ToString("0.0", CultureInfo.InvariantCulture);
         SessionFolder.Text = settings.SessionFolder;
@@ -65,6 +64,48 @@ public partial class SettingsWindow : Window
             ? $"Modes from {name}. Both cameras use the mode you pick."
             : $"{name} has not reported its modes yet. Both cameras use the mode you pick.";
     }
+
+    private void TriggerSourceList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (ThresholdSlider is null || CalibrateButton is null || CalibrateHint is null)
+        {
+            return;
+        }
+
+        ApplyTriggerControls();
+    }
+
+    private void ApplyTriggerControls()
+    {
+        var launchMonitor = SelectedTrigger() == TriggerSources.LaunchMonitor;
+        ThresholdSlider.IsEnabled = !launchMonitor;
+        if (launchMonitor)
+        {
+            CalibrateButton.IsEnabled = false;
+            CalibrateHint.Text = "ProTee VX Labs arms the take when the ball moves. Npcap must be installed.";
+            return;
+        }
+
+        CalibrateButton.IsEnabled = _calibration?.HasMicrophone == true;
+        CalibrateHint.Text = CalibrateButton.IsEnabled ? "3 swings; listens above 2 kHz" : "Choose a working microphone first.";
+    }
+
+    private void SelectTrigger(string source)
+    {
+        foreach (ComboBoxItem item in TriggerSourceList.Items)
+        {
+            if (item.Tag as string == source)
+            {
+                TriggerSourceList.SelectedItem = item;
+                return;
+            }
+        }
+
+        TriggerSourceList.SelectedIndex = 0;
+    }
+
+    private string SelectedTrigger() =>
+        (TriggerSourceList.SelectedItem as ComboBoxItem)?.Tag as string ?? TriggerSources.Microphone;
 
     private void ThresholdSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
@@ -159,6 +200,7 @@ public partial class SettingsWindow : Window
             return;
         }
 
+        _settings.TriggerSource = TriggerSources.Normalize(SelectedTrigger());
         _settings.TriggerThreshold = (int)Math.Round(ThresholdSlider.Value);
         _settings.SecondsBeforeImpact = before;
         _settings.SecondsAfterImpact = after;
