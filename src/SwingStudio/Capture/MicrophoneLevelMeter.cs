@@ -38,7 +38,7 @@ public sealed class MicrophoneLevelMeter : IDisposable
             {
                 recorder = StartRecorder(device, generation, raw);
             }
-            catch (Exception ex) when (ex is InvalidOperationException or COMException)
+            catch (Exception ex) when (ex is (InvalidOperationException or COMException) and not AudioDeviceDisconnectedException)
             {
                 Log.Warn($"Microphone {device.FriendlyName} does not support a raw stream, so Windows audio enhancements stay on: {ex.Message}");
                 raw = false;

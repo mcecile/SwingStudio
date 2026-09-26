@@ -97,10 +97,11 @@ public sealed class CameraPreview : IDisposable
             return;
         }
 
-        capture.Set(VideoCaptureProperties.FourCC, FourCC.FromString(fourCc));
+        // DirectShow drops back to the default FourCC whenever width, height, or fps is set, so FourCC goes last.
         capture.Set(VideoCaptureProperties.FrameWidth, width);
         capture.Set(VideoCaptureProperties.FrameHeight, height);
         capture.Set(VideoCaptureProperties.Fps, framesPerSecond);
+        capture.Set(VideoCaptureProperties.FourCC, FourCC.FromString(fourCc));
         capture.Set(VideoCaptureProperties.BufferSize, 1);
         capture.Set(VideoCaptureProperties.ConvertRgb, 1);
         if (controls is not null)
