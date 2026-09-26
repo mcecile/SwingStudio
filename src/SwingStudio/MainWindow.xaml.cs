@@ -4,7 +4,6 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
-using System.Windows.Shapes;
 using System.Windows.Threading;
 using SwingStudio.Capture;
 using SwingStudio.Session;
@@ -34,7 +33,6 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _bufferTimer = new() { Interval = TimeSpan.FromMilliseconds(200) };
     private readonly DispatcherTimer _playbackTimer = new() { Interval = TimeSpan.FromMilliseconds(33) };
     private readonly Stopwatch _playbackClock = new();
-    private static readonly SolidColorBrush ContactBrush = CreateContactBrush();
     private IReadOnlyList<CameraDevice> _cameras = [];
     private bool _suppressSelection;
     private bool _suppressMicrophone;
@@ -58,26 +56,22 @@ public partial class MainWindow : Window
     private double _playbackStamp;
     private double _takeLengthMs;
     private double _playbackWindowStart;
-    private double _playbackContactMs;
     private FrameSlice? _playbackA;
     private FrameSlice? _playbackB;
-    private int _contactA = -1;
-    private int _contactB = -1;
     private int _shownA = -1;
     private int _shownB = -1;
-    private double _contactHoldA;
-    private double _contactHoldB;
     private double _strikeStartMs;
     private double _strikeEndMs;
     private bool _levelWasBelow = true;
     private volatile Action<byte[], NAudio.Wave.WaveFormat>? _audioTap;
+    private double _audioClockMs;
     private bool _calibrating;
 
     public MainWindow()
     {
         _settings = SettingsStore.Load();
         InitializeComponent();
-        Log.Info($"Settings: session folder {_settings.SessionFolder}, keep {NormalizedSwingsToKeep()} unsaved, capture {_settings.CaptureWidth}x{_settings.CaptureHeight} {_settings.CaptureFramesPerSecond:0.##} fps {_settings.CaptureFourCc}, threshold {_settings.TriggerThreshold}, offset {_settings.ContactOffsetMs} ms, window {_settings.SecondsBeforeImpact:0.0} s before / {_settings.SecondsAfterImpact:0.0} s after.");
+        Log.Info($"Settings: session folder {_settings.SessionFolder}, keep {NormalizedSwingsToKeep()} unsaved, capture {_settings.CaptureWidth}x{_settings.CaptureHeight} {_settings.CaptureFramesPerSecond:0.##} fps {_settings.CaptureFourCc}, threshold {_settings.TriggerThreshold}, window {_settings.SecondsBeforeImpact:0.0} s before / {_settings.SecondsAfterImpact:0.0} s after.");
         _previewA = new CameraPreview("Camera A", Dispatcher, ShowFrameA, message => ShowPreviewError(true, message));
         _previewB = new CameraPreview("Camera B", Dispatcher, ShowFrameB, message => ShowPreviewError(false, message));
         _bufferTimer.Tick += (_, _) => ShowBufferStatus();
@@ -338,7 +332,9 @@ public partial class MainWindow : Window
                 var durationMs = format.SampleRate <= 0 || format.BlockAlign <= 0
                     ? 0
                     : data.Length / (double)format.BlockAlign / format.SampleRate * 1000;
-                _audio.Add(_clock.ElapsedMilliseconds - durationMs, data, format, RetentionSeconds());
+                var nowMs = _clock.ElapsedMilliseconds;
+                _audioClockMs = nowMs;
+                _audio.Add(nowMs - durationMs, data, format, RetentionSeconds());
                 _audioTap?.Invoke(data, format);
             });
             SetMicrophoneStatus(null);
@@ -375,7 +371,12 @@ public partial class MainWindow : Window
                 EndPlayback();
             }
 
-            var now = _clock.ElapsedMilliseconds;
+            var now = _audioClockMs;
+            if (now <= 0)
+            {
+                now = _clock.ElapsedMilliseconds;
+            }
+
             lock (_strikeGate)
             {
                 _strikeStartMs = now;
@@ -478,7 +479,6 @@ public partial class MainWindow : Window
         var windowStart = strikeStartMs - Math.Max(0.1, _settings.SecondsBeforeImpact) * 1000;
         var windowEnd = strikeEndMs;
         var triggerMs = strikeStartMs - windowStart;
-        var offsetMs = _settings.ContactOffsetMs;
         var triggerThreshold = _settings.TriggerThreshold;
         var keep = NormalizedSwingsToKeep();
         var sessionRoot = _settings.SessionFolder;
@@ -514,8 +514,8 @@ public partial class MainWindow : Window
             try
             {
                 var timer = Stopwatch.StartNew();
-                TakeWriter.Write(session, framesA, framesB, audio, windowStart, triggerMs, offsetMs, triggerThreshold);
-                Log.Info($"Saved take {System.IO.Path.GetFileName(session.FolderPath)} in {timer.ElapsedMilliseconds} ms: contact {session.ContactMs:0.0} ms, trigger {triggerMs:0.0} ms, offset {offsetMs} ms.");
+                TakeWriter.Write(session, framesA, framesB, audio, windowStart, triggerMs, triggerThreshold);
+                Log.Info($"Saved take {System.IO.Path.GetFileName(session.FolderPath)} in {timer.ElapsedMilliseconds} ms: contact {session.ContactMs:0.0} ms, trigger {triggerMs:0.0} ms.");
                 SwingCatalog.Trim(sessionRoot, keep, session.FolderPath, _namingFolder);
                 Dispatcher.BeginInvoke(() =>
                 {
@@ -531,7 +531,7 @@ public partial class MainWindow : Window
                     _loadedFolder = session.FolderPath;
                     LoadDrawings();
                     RefreshSwingList();
-                    StartPlayback(framesA, framesB, windowStart, session.ContactMs ?? triggerMs);
+                    StartPlayback(framesA, framesB, windowStart);
                 });
             }
             catch (Exception ex)
@@ -551,9 +551,9 @@ public partial class MainWindow : Window
         });
     }
 
-    private void StartPlayback(FrameSlice framesA, FrameSlice framesB, double windowStart, double contactMs)
+    private void StartPlayback(FrameSlice framesA, FrameSlice framesB, double windowStart)
     {
-        if (!HoldFrames(framesA, framesB, windowStart, contactMs))
+        if (!HoldFrames(framesA, framesB, windowStart))
         {
             _saving = false;
             StatusDetail.Text = "";
@@ -564,7 +564,7 @@ public partial class MainWindow : Window
         ResumePlayback(fromStart: true);
     }
 
-    private bool HoldFrames(FrameSlice framesA, FrameSlice framesB, double windowStart, double contactMs, bool enhancePlayback = true)
+    private bool HoldFrames(FrameSlice framesA, FrameSlice framesB, double windowStart, bool enhancePlayback = true)
     {
         var length = TakeLength(framesA, framesB, windowStart);
         if (length <= 0)
@@ -587,9 +587,6 @@ public partial class MainWindow : Window
         }
 
         _playbackWindowStart = windowStart;
-        _playbackContactMs = contactMs;
-        _contactA = ContactIndex(framesA, contactMs, windowStart);
-        _contactB = ContactIndex(framesB, contactMs, windowStart);
         _takeLengthMs = length;
         _enhancePlayback = enhancePlayback;
         return true;
@@ -637,7 +634,7 @@ public partial class MainWindow : Window
                         return;
                     }
 
-                    if (!HoldFrames(loaded.CameraA, loaded.CameraB, 0, loaded.ContactMs, enhancePlayback: false))
+                    if (!HoldFrames(loaded.CameraA, loaded.CameraB, 0, enhancePlayback: false))
                     {
                         Log.Warn($"Swing {folder} has no video.");
                         _saving = false;
@@ -681,8 +678,6 @@ public partial class MainWindow : Window
         _previousPlayheadMs = 0;
         _shownA = -1;
         _shownB = -1;
-        _contactHoldA = 0;
-        _contactHoldB = 0;
         StatusDetail.Text = PausedStatus;
         ShowCurrentFrame();
         ShowPlaybackControls();
@@ -738,8 +733,6 @@ public partial class MainWindow : Window
 
         _previousPlayheadMs = PlaybackSlider.Value;
         _playheadMs = PlaybackSlider.Value;
-        _contactHoldA = 0;
-        _contactHoldB = 0;
         if (!_playing)
         {
             if (!_showingTake)
@@ -812,8 +805,6 @@ public partial class MainWindow : Window
         StatusDetail.Text = PausedStatus;
         _previousPlayheadMs = target;
         _playheadMs = target;
-        _contactHoldA = 0;
-        _contactHoldB = 0;
         ShowCurrentFrame();
         ShowPlaybackControls();
     }
@@ -838,8 +829,6 @@ public partial class MainWindow : Window
             _previousPlayheadMs = 0;
             _shownA = -1;
             _shownB = -1;
-            _contactHoldA = 0;
-            _contactHoldB = 0;
             _playbackClock.Restart();
         }
         else if (!_playbackClock.IsRunning)
@@ -887,8 +876,6 @@ public partial class MainWindow : Window
             _previousPlayheadMs = 0;
             _shownA = -1;
             _shownB = -1;
-            _contactHoldA = 0;
-            _contactHoldB = 0;
             StatusDetail.Text = ReplayStatus();
         }
 
@@ -898,18 +885,12 @@ public partial class MainWindow : Window
 
     private void ShowCurrentFrame()
     {
-        ShowPlaybackPane(_playbackA, CameraAImage, CameraAOverlay, _contactA, ref _shownA, ref _contactHoldA);
-        ShowPlaybackPane(_playbackB, CameraBImage, CameraBOverlay, _contactB, ref _shownB, ref _contactHoldB);
+        ShowPlaybackPane(_playbackA, CameraAImage, ref _shownA);
+        ShowPlaybackPane(_playbackB, CameraBImage, ref _shownB);
         RedrawDrawings();
     }
 
-    private void ShowPlaybackPane(
-        FrameSlice? slice,
-        Image image,
-        Canvas overlay,
-        int contactIndex,
-        ref int shownIndex,
-        ref double contactHold)
+    private void ShowPlaybackPane(FrameSlice? slice, Image image, ref int shownIndex)
     {
         if (slice is null || slice.Frames.Count == 0)
         {
@@ -922,15 +903,6 @@ public partial class MainWindow : Window
             shownIndex = index;
             image.Source = CameraPreview.CopyFrame(slice.Frames[index].Frame, _enhancePlayback);
         }
-
-        var now = _playbackClock.Elapsed.TotalMilliseconds;
-        var crossed = _playing && _previousPlayheadMs < _playbackContactMs && _playheadMs >= _playbackContactMs;
-        if (_playing && (index == contactIndex || crossed))
-        {
-            contactHold = Math.Max(contactHold, now + 160);
-        }
-
-        SetContactLine(overlay, _playing ? now < contactHold : index == contactIndex);
     }
 
     private void EndPlayback()
@@ -943,10 +915,6 @@ public partial class MainWindow : Window
         _previousPlayheadMs = 0;
         _shownA = -1;
         _shownB = -1;
-        _contactHoldA = 0;
-        _contactHoldB = 0;
-        SetContactLine(CameraAOverlay, false);
-        SetContactLine(CameraBOverlay, false);
         ExitDrawMode();
         RedrawDrawings();
         _saving = false;
@@ -1071,28 +1039,6 @@ public partial class MainWindow : Window
         return index;
     }
 
-    private static int ContactIndex(FrameSlice slice, double contactMs, double windowStart)
-    {
-        if (slice.Frames.Count == 0)
-        {
-            return -1;
-        }
-
-        var best = 0;
-        var bestDistance = double.MaxValue;
-        for (var i = 0; i < slice.Frames.Count; i++)
-        {
-            var distance = Math.Abs(slice.Frames[i].TimeMs - windowStart - contactMs);
-            if (distance < bestDistance)
-            {
-                bestDistance = distance;
-                best = i;
-            }
-        }
-
-        return best;
-    }
-
     private static double TakeLength(FrameSlice framesA, FrameSlice framesB, double windowStart)
     {
         var length = 0d;
@@ -1107,43 +1053,6 @@ public partial class MainWindow : Window
         }
 
         return length;
-    }
-
-    private static void SetContactLine(Canvas overlay, bool show)
-    {
-        overlay.Children.Clear();
-        if (!show || overlay.ActualWidth <= 0 || overlay.ActualHeight <= 0)
-        {
-            return;
-        }
-
-        var y = overlay.ActualHeight / 2;
-        overlay.Children.Add(new Line
-        {
-            X1 = 0,
-            X2 = overlay.ActualWidth,
-            Y1 = y,
-            Y2 = y,
-            Stroke = ContactBrush,
-            StrokeThickness = 3
-        });
-        var label = new TextBlock
-        {
-            Text = "IMPACT",
-            Foreground = ContactBrush,
-            FontSize = 14,
-            FontWeight = FontWeights.SemiBold
-        };
-        Canvas.SetLeft(label, 8);
-        Canvas.SetTop(label, y - 22);
-        overlay.Children.Add(label);
-    }
-
-    private static SolidColorBrush CreateContactBrush()
-    {
-        var brush = new SolidColorBrush(Color.FromRgb(255, 224, 138));
-        brush.Freeze();
-        return brush;
     }
 
     private static bool IsBufferStatus(string text) => text.StartsWith("Buffer ", StringComparison.Ordinal);
@@ -1219,7 +1128,7 @@ public partial class MainWindow : Window
         }
 
         SettingsStore.Save(_settings);
-        Log.Info($"Settings changed: session folder {_settings.SessionFolder}, keep {NormalizedSwingsToKeep()} unsaved, capture {_settings.CaptureWidth}x{_settings.CaptureHeight} {_settings.CaptureFramesPerSecond:0.##} fps {_settings.CaptureFourCc}, threshold {_settings.TriggerThreshold}, offset {_settings.ContactOffsetMs} ms, window {_settings.SecondsBeforeImpact:0.0} s before / {_settings.SecondsAfterImpact:0.0} s after.");
+        Log.Info($"Settings changed: session folder {_settings.SessionFolder}, keep {NormalizedSwingsToKeep()} unsaved, capture {_settings.CaptureWidth}x{_settings.CaptureHeight} {_settings.CaptureFramesPerSecond:0.##} fps {_settings.CaptureFourCc}, threshold {_settings.TriggerThreshold}, window {_settings.SecondsBeforeImpact:0.0} s before / {_settings.SecondsAfterImpact:0.0} s after.");
         SwingCatalog.Trim(_settings.SessionFolder, NormalizedSwingsToKeep(), _loadedFolder);
         RefreshSwingList();
         if (width != _settings.CaptureWidth

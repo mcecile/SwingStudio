@@ -27,7 +27,6 @@ public partial class SettingsWindow : Window
         SecondsAfter.Text = settings.SecondsAfterImpact.ToString("0.0", CultureInfo.InvariantCulture);
         SessionFolder.Text = settings.SessionFolder;
         SwingsToKeep.Text = Math.Clamp(settings.SwingsToKeep <= 0 ? 10 : settings.SwingsToKeep, 1, 50).ToString(CultureInfo.InvariantCulture);
-        TriggerOffset.Text = settings.ContactOffsetMs.ToString(CultureInfo.InvariantCulture);
 
         var offered = CameraModeLister.Recall(settings.CameraADevicePath).ToList();
         var cameraReportedModes = offered.Count > 0;
@@ -136,15 +135,6 @@ public partial class SettingsWindow : Window
             return;
         }
 
-        var offsetText = TriggerOffset.Text.Trim();
-        var offsetParsed = int.TryParse(offsetText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var offset)
-            || int.TryParse(offsetText, NumberStyles.Integer, CultureInfo.CurrentCulture, out offset);
-        if (!offsetParsed || offset is < -2000 or > 2000)
-        {
-            ShowInvalid("Trigger offset must be a whole number of milliseconds from -2000 to 2000.");
-            return;
-        }
-
         if (!TryReadCount(SwingsToKeep.Text, out var swingsToKeep))
         {
             ShowInvalid("Swings to keep must be a whole number from 1 to 50.");
@@ -178,7 +168,6 @@ public partial class SettingsWindow : Window
         _settings.CaptureFourCc = mode.FourCc;
         _settings.SessionFolder = folder;
         _settings.SwingsToKeep = swingsToKeep;
-        _settings.ContactOffsetMs = offset;
         DialogResult = true;
     }
 

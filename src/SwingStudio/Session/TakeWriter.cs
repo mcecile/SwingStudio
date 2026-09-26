@@ -22,23 +22,22 @@ public static class TakeWriter
         AudioSlice audio,
         double windowStartMs,
         double triggerMs,
-        double offsetMs,
         double triggerThreshold)
     {
         Directory.CreateDirectory(session.FolderPath);
         var takeLengthMs = LastTime(cameraA, cameraB, audio, windowStartMs);
-        WriteAudio(session, audio, windowStartMs, takeLengthMs, triggerMs, offsetMs, triggerThreshold);
+        WriteAudio(session, audio, windowStartMs, takeLengthMs, triggerMs, triggerThreshold);
         session.AchievedModeA = WriteCamera(session, cameraA, SwingSession.CameraAVideoFileName, SwingSession.CameraATimestampsFileName, windowStartMs);
         session.AchievedModeB = WriteCamera(session, cameraB, SwingSession.CameraBVideoFileName, SwingSession.CameraBTimestampsFileName, windowStartMs);
         File.WriteAllText(Path.Combine(session.FolderPath, SwingSession.ManifestFileName), JsonSerializer.Serialize(session, JsonOptions));
     }
 
-    private static void WriteAudio(SwingSession session, AudioSlice audio, double windowStartMs, double takeLengthMs, double triggerMs, double offsetMs, double triggerThreshold)
+    private static void WriteAudio(SwingSession session, AudioSlice audio, double windowStartMs, double takeLengthMs, double triggerMs, double triggerThreshold)
     {
         if (audio.Format is not WaveFormat format || audio.Packets.Count == 0)
         {
             Log.Warn("The take has no audio; contact uses the trigger time.");
-            session.ContactMs = Math.Clamp(triggerMs + offsetMs, 0, Math.Max(0, takeLengthMs));
+            session.ContactMs = Math.Clamp(triggerMs, 0, Math.Max(0, takeLengthMs));
             return;
         }
 
@@ -46,7 +45,7 @@ public static class TakeWriter
         var audioStartMs = audio.Packets[0].TimeMs - windowStartMs;
         session.SampleRate = format.SampleRate;
         session.AudioStartMs = audioStartMs;
-        session.ContactMs = ContactTime.Resolve(mono, format.SampleRate, audioStartMs, takeLengthMs, triggerMs, offsetMs, triggerThreshold);
+        session.ContactMs = ContactTime.Resolve(mono, format.SampleRate, audioStartMs, takeLengthMs, triggerMs, 0, triggerThreshold);
 
         var pcmFormat = new WaveFormat(format.SampleRate, 16, format.Channels);
         using var writer = new WaveFileWriter(Path.Combine(session.FolderPath, SwingSession.MicrophoneFileName), pcmFormat);
