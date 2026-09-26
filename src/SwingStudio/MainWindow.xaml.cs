@@ -1,5 +1,6 @@
 ﻿using System.Diagnostics;
 using System.Globalization;
+using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -79,6 +80,7 @@ public partial class MainWindow : Window
     {
         _settings = SettingsStore.Load();
         InitializeComponent();
+        AppVersion.Text = ProductVersion();
         Log.Info($"Settings: session folder {_settings.SessionFolder}, keep {NormalizedSwingsToKeep()} unsaved, capture {_settings.CaptureWidth}x{_settings.CaptureHeight} {_settings.CaptureFramesPerSecond:0.##} fps {_settings.CaptureFourCc}, trigger {TriggerSources.Normalize(_settings.TriggerSource)}, threshold {_settings.TriggerThreshold}, window {_settings.SecondsBeforeImpact:0.0} s before / {_settings.SecondsAfterImpact:0.0} s after.");
         _previewA = new CameraPreview("Camera A", Dispatcher, ShowFrameA, message => ShowPreviewError(true, message));
         _previewB = new CameraPreview("Camera B", Dispatcher, ShowFrameB, message => ShowPreviewError(false, message));
@@ -1126,6 +1128,12 @@ public partial class MainWindow : Window
         }
 
         return length;
+    }
+
+    private static string ProductVersion()
+    {
+        var version = Assembly.GetExecutingAssembly().GetName().Version;
+        return version is null ? "" : $"{version.Major}.{version.Minor}.{version.Build}";
     }
 
     private static bool IsBufferStatus(string text) => text.StartsWith("Buffer ", StringComparison.Ordinal);
