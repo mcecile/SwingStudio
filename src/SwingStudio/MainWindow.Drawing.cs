@@ -372,11 +372,11 @@ public partial class MainWindow
             {
                 Text = degrees.ToString("0", System.Globalization.CultureInfo.InvariantCulture) + "°",
                 Foreground = brush,
-                FontSize = 14,
+                FontSize = 28,
                 FontWeight = FontWeights.SemiBold
             };
-            Canvas.SetLeft(label, vertex.X + 8);
-            Canvas.SetTop(label, vertex.Y - 22);
+            Canvas.SetLeft(label, vertex.X + 16);
+            Canvas.SetTop(label, vertex.Y - 44);
             canvas.Children.Add(label);
         }
     }
