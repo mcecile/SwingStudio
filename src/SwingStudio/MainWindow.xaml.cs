@@ -46,6 +46,9 @@ public partial class MainWindow : Window
     private readonly object _strikeGate = new();
     private volatile bool _strikeActive;
     private volatile bool _saving;
+    private bool _writing;
+    private bool _opening;
+    private readonly Queue<PendingTake> _pendingTakes = new();
     private bool _playing;
     private bool _showingTake;
     private bool _enhancePlayback = true;
@@ -114,6 +117,7 @@ public partial class MainWindow : Window
             _playbackTimer.Stop();
             _closing = true;
             _launchMonitor.Dispose();
+            DisposePendingTakes();
             EndPlayback();
             _playbackA?.Dispose();
             _playbackB?.Dispose();
@@ -370,7 +374,7 @@ public partial class MainWindow : Window
 
         MicrophoneLevel.Value = level;
         var below = level < _settings.TriggerThreshold;
-        if (_calibrating || IsLaunchMonitor || _strikeActive || _saving || _drawTool is not null)
+        if (_calibrating || IsLaunchMonitor || _strikeActive || _opening || _drawTool is not null)
         {
             _levelWasBelow = below;
             return;
@@ -392,7 +396,7 @@ public partial class MainWindow : Window
 
     private void ArmStrike(double nowMs, string reason)
     {
-        if (_closing || _calibrating || _strikeActive || _saving || _drawTool is not null)
+        if (_closing || _calibrating || _strikeActive || _opening || _drawTool is not null)
         {
             return;
         }
@@ -581,49 +585,117 @@ public partial class MainWindow : Window
             _strikeActive = false;
         }
 
+        _pendingTakes.Enqueue(new PendingTake
+        {
+            Session = session,
+            FramesA = framesA,
+            FramesB = framesB,
+            Audio = audio,
+            WindowStart = windowStart,
+            TriggerMs = triggerMs,
+            TriggerThreshold = triggerThreshold,
+            Keep = keep,
+            SessionRoot = sessionRoot
+        });
         _saving = true;
         StatusDetail.Text = "Saving swing…";
         Log.Info($"Saving take: {framesA.Frames.Count} Camera A frames, {framesB.Frames.Count} Camera B frames, {audio.Packets.Count} audio packets, {(windowEnd - windowStart) / 1000:0.00} s window.");
+        WriteNextTake();
+    }
+
+    private void WriteNextTake()
+    {
+        if (_writing || _pendingTakes.Count == 0)
+        {
+            return;
+        }
+
+        var pending = _pendingTakes.Dequeue();
+        _writing = true;
         Task.Run(() =>
         {
             try
             {
                 var timer = Stopwatch.StartNew();
-                TakeWriter.Write(session, framesA, framesB, audio, windowStart, triggerMs, triggerThreshold);
-                Log.Info($"Saved take {System.IO.Path.GetFileName(session.FolderPath)} in {timer.ElapsedMilliseconds} ms: contact {session.ContactMs:0.0} ms, trigger {triggerMs:0.0} ms.");
-                SwingCatalog.Trim(sessionRoot, keep, session.FolderPath, _namingFolder);
-                Dispatcher.BeginInvoke(() =>
-                {
-                    if (_closing)
-                    {
-                        framesA.Dispose();
-                        framesB.Dispose();
-                        _saving = false;
-                        return;
-                    }
-
-                    _lastTakeFolder = session.FolderPath;
-                    _loadedFolder = session.FolderPath;
-                    LoadDrawings();
-                    RefreshSwingList();
-                    StartPlayback(framesA, framesB, windowStart);
-                });
+                TakeWriter.Write(pending.Session, pending.FramesA, pending.FramesB, pending.Audio, pending.WindowStart, pending.TriggerMs, pending.TriggerThreshold);
+                Log.Info($"Saved take {System.IO.Path.GetFileName(pending.Session.FolderPath)} in {timer.ElapsedMilliseconds} ms: contact {pending.Session.ContactMs:0.0} ms, trigger {pending.TriggerMs:0.0} ms.");
+                SwingCatalog.Trim(pending.SessionRoot, pending.Keep, pending.Session.FolderPath, _namingFolder);
+                Dispatcher.BeginInvoke(() => FinishWrite(pending, null));
             }
             catch (Exception ex)
             {
-                Log.Error($"Saving take {session.FolderPath} failed.", ex);
-                framesA.Dispose();
-                framesB.Dispose();
-                Dispatcher.BeginInvoke(() =>
-                {
-                    _saving = false;
-                    if (!_closing)
-                    {
-                        StatusDetail.Text = ex.Message;
-                    }
-                });
+                Log.Error($"Saving take {pending.Session.FolderPath} failed.", ex);
+                Dispatcher.BeginInvoke(() => FinishWrite(pending, ex));
             }
         });
+    }
+
+    private void FinishWrite(PendingTake pending, Exception? error)
+    {
+        _writing = false;
+        if (_closing)
+        {
+            pending.DisposeFrames();
+            DisposePendingTakes();
+            _saving = false;
+            return;
+        }
+
+        if (error is not null)
+        {
+            pending.DisposeFrames();
+            if (_pendingTakes.Count == 0)
+            {
+                _saving = false;
+                if (!_strikeActive)
+                {
+                    StatusDetail.Text = error.Message;
+                }
+
+                return;
+            }
+
+            if (!_strikeActive)
+            {
+                StatusDetail.Text = "Saving swing…";
+            }
+
+            WriteNextTake();
+            return;
+        }
+
+        if (_strikeActive || _pendingTakes.Count > 0)
+        {
+            pending.DisposeFrames();
+            RefreshSwingList();
+            if (_pendingTakes.Count == 0)
+            {
+                _saving = false;
+                return;
+            }
+
+            if (!_strikeActive)
+            {
+                StatusDetail.Text = "Saving swing…";
+            }
+
+            WriteNextTake();
+            return;
+        }
+
+        _lastTakeFolder = pending.Session.FolderPath;
+        _loadedFolder = pending.Session.FolderPath;
+        LoadDrawings();
+        RefreshSwingList();
+        StartPlayback(pending.FramesA, pending.FramesB, pending.WindowStart);
+    }
+
+    private void DisposePendingTakes()
+    {
+        while (_pendingTakes.Count > 0)
+        {
+            _pendingTakes.Dequeue().DisposeFrames();
+        }
     }
 
     private void StartPlayback(FrameSlice framesA, FrameSlice framesB, double windowStart)
@@ -679,7 +751,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (_saving || _strikeActive)
+        if (_saving || _opening || _strikeActive)
         {
             ReselectLoadedSwing();
             return;
@@ -693,7 +765,7 @@ public partial class MainWindow : Window
         _playing = false;
         _playbackTimer.Stop();
         _playbackClock.Stop();
-        _saving = true;
+        _opening = true;
         StatusDetail.Text = "Opening swing…";
         Task.Run(() =>
         {
@@ -705,14 +777,14 @@ public partial class MainWindow : Window
                     if (_closing)
                     {
                         loaded.Dispose();
-                        _saving = false;
+                        _opening = false;
                         return;
                     }
 
                     if (!HoldFrames(loaded.CameraA, loaded.CameraB, 0, enhancePlayback: false))
                     {
                         Log.Warn($"Swing {folder} has no video.");
-                        _saving = false;
+                        _opening = false;
                         StatusDetail.Text = "This swing has no video.";
                         RefreshSwingList();
                         return;
@@ -721,7 +793,7 @@ public partial class MainWindow : Window
                     _loadedFolder = folder;
                     _lastTakeFolder = folder;
                     LoadDrawings();
-                    _saving = false;
+                    _opening = false;
                     PauseAtStart();
                 });
             }
@@ -730,7 +802,7 @@ public partial class MainWindow : Window
                 Log.Error($"Opening swing {folder} failed.", ex);
                 Dispatcher.BeginInvoke(() =>
                 {
-                    _saving = false;
+                    _opening = false;
                     if (!_closing)
                     {
                         StatusDetail.Text = ex.Message;
@@ -1484,5 +1556,32 @@ public partial class MainWindow : Window
             && top + height > screenTop + 80
             && left < screenRight - 80
             && top < screenBottom - 80;
+    }
+
+    private sealed class PendingTake
+    {
+        public required SwingSession Session { get; init; }
+
+        public required FrameSlice FramesA { get; init; }
+
+        public required FrameSlice FramesB { get; init; }
+
+        public required AudioSlice Audio { get; init; }
+
+        public required double WindowStart { get; init; }
+
+        public required double TriggerMs { get; init; }
+
+        public required int TriggerThreshold { get; init; }
+
+        public required int Keep { get; init; }
+
+        public required string SessionRoot { get; init; }
+
+        public void DisposeFrames()
+        {
+            FramesA.Dispose();
+            FramesB.Dispose();
+        }
     }
 }
