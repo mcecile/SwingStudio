@@ -135,16 +135,9 @@ public static class TakeWriter
             source = resized;
         }
 
-        if (source.Channels() == 3)
-        {
-            return resized ?? source.Clone();
-        }
-
-        var color = new Mat();
-        var conversion = source.Channels() == 1 ? ColorConversionCodes.GRAY2BGR : ColorConversionCodes.BGRA2BGR;
-        Cv2.CvtColor(source, color, conversion);
+        var look = FrameLook.ApplyBgr(source);
         resized?.Dispose();
-        return color;
+        return look;
     }
 
     private static double LastTime(FrameSlice cameraA, FrameSlice cameraB, AudioSlice audio, double windowStartMs)

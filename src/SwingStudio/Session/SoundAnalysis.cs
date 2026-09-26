@@ -304,8 +304,8 @@ public static class SoundAnalysis
         }
         else
         {
-            var threshold = roomPeak > 0 ? Math.Sqrt(roomPeak * quietest) : quietest / 2;
-            advice.ProposedThreshold = (int)Math.Clamp(Math.Round(threshold), 1, 99);
+            advice.ProposedThreshold = ProposeThreshold(roomPeak, quietest);
+            advice.Notes.Add("Room was measured while quiet. If music or talking fires the trigger, raise the threshold.");
         }
 
         if (advice.Margin is double margin && margin < 2)
@@ -322,7 +322,7 @@ public static class SoundAnalysis
 
         if (quietest > 0 && loudest / quietest > 3)
         {
-            advice.Warnings.Add($"Strike peaks ranged from {quietest:0.#} to {loudest:0.#}; Windows audio enhancements or automatic gain may be changing the level.");
+            advice.Notes.Add($"Strike peaks ranged from {quietest:0.#} to {loudest:0.#}. That is normal across clubs; a driver is much louder than a soft iron.");
         }
 
         if (advice.ProposedThreshold is int proposed)
@@ -375,6 +375,24 @@ public static class SoundAnalysis
     private const double TargetPeak = 70;
     private const double QuietOk = 25;
     private const double LoudOk = 85;
+    private const double MinThreshold = 5;
+    private const double RoomHeadroom = 8;
+    private const double QuietStrikeShare = 0.4;
+    private const double MaxShareOfQuietest = 0.7;
+
+    private static int ProposeThreshold(double roomPeak, double quietestStrike)
+    {
+        var fromRoom = roomPeak * RoomHeadroom;
+        var fromStrike = quietestStrike * QuietStrikeShare;
+        var ceiling = quietestStrike * MaxShareOfQuietest;
+        var threshold = Math.Max(MinThreshold, Math.Max(fromRoom, fromStrike));
+        if (ceiling >= MinThreshold)
+        {
+            threshold = Math.Min(threshold, ceiling);
+        }
+
+        return (int)Math.Clamp(Math.Round(threshold), 1, 99);
+    }
 
     private static void AddGainAdvice(CalibrationAdvice advice, List<(int Index, SoundEvent Strike)> strikes, double? windowsLevel)
     {

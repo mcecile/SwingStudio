@@ -44,6 +44,7 @@ public partial class MainWindow : Window
     private volatile bool _saving;
     private bool _playing;
     private bool _showingTake;
+    private bool _enhancePlayback = true;
     private bool _sliderInternal;
     private bool _scrubbing;
     private string? _lastTakeFolder;
@@ -563,7 +564,7 @@ public partial class MainWindow : Window
         ResumePlayback(fromStart: true);
     }
 
-    private bool HoldFrames(FrameSlice framesA, FrameSlice framesB, double windowStart, double contactMs)
+    private bool HoldFrames(FrameSlice framesA, FrameSlice framesB, double windowStart, double contactMs, bool enhancePlayback = true)
     {
         var length = TakeLength(framesA, framesB, windowStart);
         if (length <= 0)
@@ -590,6 +591,7 @@ public partial class MainWindow : Window
         _contactA = ContactIndex(framesA, contactMs, windowStart);
         _contactB = ContactIndex(framesB, contactMs, windowStart);
         _takeLengthMs = length;
+        _enhancePlayback = enhancePlayback;
         return true;
     }
 
@@ -635,7 +637,7 @@ public partial class MainWindow : Window
                         return;
                     }
 
-                    if (!HoldFrames(loaded.CameraA, loaded.CameraB, 0, loaded.ContactMs))
+                    if (!HoldFrames(loaded.CameraA, loaded.CameraB, 0, loaded.ContactMs, enhancePlayback: false))
                     {
                         Log.Warn($"Swing {folder} has no video.");
                         _saving = false;
@@ -918,7 +920,7 @@ public partial class MainWindow : Window
         if (index != shownIndex)
         {
             shownIndex = index;
-            image.Source = CameraPreview.CopyFrame(slice.Frames[index].Frame);
+            image.Source = CameraPreview.CopyFrame(slice.Frames[index].Frame, _enhancePlayback);
         }
 
         var now = _playbackClock.Elapsed.TotalMilliseconds;

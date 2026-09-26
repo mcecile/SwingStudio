@@ -224,14 +224,25 @@ public sealed class CameraPreview : IDisposable
         }
     }
 
-    internal static BitmapSource CopyFrame(Mat frame)
+    internal static BitmapSource CopyFrame(Mat frame, bool enhance = true)
     {
+        if (enhance)
+        {
+            using var look = FrameLook.ApplyGray(frame);
+            return ToBitmap(look, PixelFormats.Gray8);
+        }
+
         var format = frame.Channels() switch
         {
             1 => PixelFormats.Gray8,
             4 => PixelFormats.Bgra32,
             _ => PixelFormats.Bgr24
         };
+        return ToBitmap(frame, format);
+    }
+
+    private static BitmapSource ToBitmap(Mat frame, PixelFormat format)
+    {
         var stride = (int)frame.Step();
         var bytes = new byte[stride * frame.Height];
         Marshal.Copy(frame.Data, bytes, 0, bytes.Length);
