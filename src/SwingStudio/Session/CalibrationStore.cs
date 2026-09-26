@@ -49,7 +49,11 @@ public static class CalibrationStore
 
         if (report.Advice is CalibrationAdvice advice)
         {
-            Log.Info(Invariant($"Calibration advice: proposed threshold {(advice.ProposedThreshold?.ToString(CultureInfo.InvariantCulture) ?? "none")}, room peak {advice.RoomMeterPeak:0.##}, strikes {advice.QuietestStrike:0.##} to {advice.LoudestStrike:0.##}, margin {Ratio(advice.Margin)}; above 2 kHz: room {advice.HighPassRoomPeak:0.##}, quietest strike {advice.HighPassQuietestStrike:0.##}, margin {Ratio(advice.HighPassMargin)}, better {advice.HighPassBetter}."));
+            Log.Info(Invariant($"Calibration advice: proposed threshold {(advice.ProposedThreshold?.ToString(CultureInfo.InvariantCulture) ?? "none")}, room peak {advice.RoomMeterPeak:0.##}, strikes {advice.QuietestStrike:0.##} to {advice.LoudestStrike:0.##}, margin {Ratio(advice.Margin)}; above 2 kHz: room {advice.HighPassRoomPeak:0.##}, quietest strike {advice.HighPassQuietestStrike:0.##}, margin {Ratio(advice.HighPassMargin)}, better {advice.HighPassBetter}; Windows mic level {(advice.CurrentWindowsLevel?.ToString("0", CultureInfo.InvariantCulture) ?? "unknown")}{(advice.SuggestedWindowsLevel is double suggested ? $" suggested {suggested:0}" : "")}{(advice.GainDb is double db ? $", gain {db:+0.0;-0.0} dB" : "")}."));
+            if (!string.IsNullOrEmpty(advice.GainAdvice))
+            {
+                Log.Info("Calibration gain: " + advice.GainAdvice);
+            }
             foreach (var warning in advice.Warnings)
             {
                 Log.Warn("Calibration: " + warning);

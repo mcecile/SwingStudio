@@ -131,6 +131,14 @@ public sealed class CalibrationAdvice
 
     public bool HighPassBetter { get; set; }
 
+    public double? CurrentWindowsLevel { get; set; }
+
+    public double? SuggestedWindowsLevel { get; set; }
+
+    public double? GainDb { get; set; }
+
+    public string? GainAdvice { get; set; }
+
     public List<string> Warnings { get; } = [];
 
     public List<string> Notes { get; } = [];
@@ -264,9 +272,10 @@ public static class SoundAnalysis
         };
     }
 
-    public static CalibrationAdvice Recommend(RoomStats? room, IReadOnlyList<SwingSound> swings, int channels)
+    public static CalibrationAdvice Recommend(RoomStats? room, IReadOnlyList<SwingSound> swings, int channels, double? windowsLevel = null)
     {
         var advice = new CalibrationAdvice();
+        advice.CurrentWindowsLevel = windowsLevel;
         var strikes = swings.Where(swing => swing.Strike is not null).Select(swing => (swing.Index, Strike: swing.Strike!)).ToList();
         if (swings.Count < 3)
         {
@@ -279,9 +288,11 @@ public static class SoundAnalysis
             return advice;
         }
 
-        var roomPeak = room?.MeterPeak ?? 0;
-        var quietest = strikes.Min(item => item.Strike.MeterPeak);
-        var loudest = strikes.Max(item => item.Strike.MeterPeak);
+        var fullRoom = room?.MeterPeak ?? 0;
+        var highPassRoom = room?.HighPassMeterPeak ?? 0;
+        var quietest = strikes.Min(item => item.Strike.HighPassMeterPeak);
+        var loudest = strikes.Max(item => item.Strike.HighPassMeterPeak);
+        var roomPeak = highPassRoom;
         advice.RoomMeterPeak = roomPeak;
         advice.QuietestStrike = quietest;
         advice.LoudestStrike = loudest;
@@ -307,13 +318,7 @@ public static class SoundAnalysis
             advice.Warnings.Add($"The room itself reaches {roomPeak:0} on the meter; turn the mic gain down or move the mic.");
         }
 
-        foreach (var (index, strike) in strikes)
-        {
-            if (strike.ClippedSamples > 0)
-            {
-                advice.Warnings.Add($"Swing {index}: the strike clipped ({strike.ClippedSamples} samples at full scale); turn the input gain down.");
-            }
-        }
+        AddGainAdvice(advice, strikes, windowsLevel);
 
         if (quietest > 0 && loudest / quietest > 3)
         {
@@ -324,9 +329,9 @@ public static class SoundAnalysis
         {
             foreach (var (index, strike) in strikes)
             {
-                if (strike.MonoPeak < proposed)
+                if (strike.HighPassMeterPeak < proposed)
                 {
-                    advice.Warnings.Add($"Swing {index}: the channel-average peak ({strike.MonoPeak:0.#}) is below {proposed}, so contact time would fall back to the trigger time.");
+                    advice.Warnings.Add($"Swing {index}: the above-2 kHz peak ({strike.HighPassMeterPeak:0.#}) is below {proposed}, so contact time would fall back to the trigger time.");
                 }
             }
         }
@@ -346,28 +351,158 @@ public static class SoundAnalysis
             }
         }
 
-        var highPassRoom = room?.HighPassMeterPeak ?? 0;
-        var highPassQuietest = strikes.Min(item => item.Strike.HighPassMeterPeak);
+        var highPassQuietest = quietest;
         advice.HighPassRoomPeak = highPassRoom;
         advice.HighPassQuietestStrike = highPassQuietest;
-        advice.HighPassMargin = highPassRoom > 0 ? Round(highPassQuietest / highPassRoom) : null;
-        advice.HighPassBetter = advice.Margin is double fullMargin && advice.HighPassMargin is double highMargin && highMargin > fullMargin * 1.5;
-        if (advice.HighPassBetter)
+        advice.HighPassMargin = advice.Margin;
+        var fullQuietest = strikes.Min(item => item.Strike.MeterPeak);
+        var fullMargin = fullRoom > 0 ? Round(fullQuietest / fullRoom) : (double?)null;
+        advice.HighPassBetter = fullMargin is double full && advice.HighPassMargin is double high && high > full * 1.5;
+        advice.Notes.Add("The trigger and contact time listen above 2 kHz.");
+        if (fullMargin is double compared)
         {
-            advice.Notes.Add($"Listening only above 2 kHz separates strikes from the room {advice.HighPassMargin:0.0}x versus {advice.Margin:0.0}x full-band; a high-frequency trigger would separate strikes better (not built yet).");
+            advice.Notes.Add($"Above 2 kHz separates strikes from the room {advice.HighPassMargin:0.0}x versus {compared:0.0}x full-band.");
         }
 
         if (channels > 1)
         {
-            advice.Notes.Add($"The mic delivers {channels} channels; the trigger uses the loudest channel, contact time uses the channel average.");
+            advice.Notes.Add($"The mic delivers {channels} channels; the trigger uses the loudest filtered channel, contact time uses the filtered channel average.");
         }
 
         return advice;
     }
 
+    private const double TargetPeak = 70;
+    private const double QuietOk = 25;
+    private const double LoudOk = 85;
+
+    private static void AddGainAdvice(CalibrationAdvice advice, List<(int Index, SoundEvent Strike)> strikes, double? windowsLevel)
+    {
+        var clipped = strikes.Where(item => item.Strike.ClippedSamples > 0 || item.Strike.HighPassMeterPeak >= 99).ToList();
+        var quietest = strikes.Min(item => item.Strike.HighPassMeterPeak);
+        var loudest = strikes.Max(item => item.Strike.HighPassMeterPeak);
+        double factor;
+        string direction;
+        if (clipped.Count > 0)
+        {
+            var worst = clipped.Max(item => item.Strike.ClippedSamples);
+            factor = worst > 500 ? 0.35 : worst > 50 ? 0.5 : 0.7;
+            direction = "down";
+        }
+        else if (loudest > LoudOk)
+        {
+            factor = TargetPeak / loudest;
+            direction = "down";
+        }
+        else if (quietest > 0 && quietest < QuietOk)
+        {
+            factor = Math.Min(TargetPeak / quietest, LoudOk / Math.Max(loudest, 1));
+            if (factor < 1.15)
+            {
+                advice.GainAdvice = "Mic gain looks good; leave the knob where it is.";
+                advice.Notes.Add(advice.GainAdvice);
+                return;
+            }
+
+            direction = "up";
+        }
+        else
+        {
+            advice.GainAdvice = "Mic gain looks good; leave the knob where it is.";
+            advice.Notes.Add(advice.GainAdvice);
+            return;
+        }
+
+        advice.GainDb = Round(20 * Math.Log10(factor));
+        if (windowsLevel is double current && current >= 1)
+        {
+            advice.SuggestedWindowsLevel = Math.Clamp(Math.Round(current * factor), 5, 100);
+        }
+
+        var clips = clipped.Count == 0
+            ? ""
+            : $" {clipped.Count} of {strikes.Count} strikes clipped ({string.Join(", ", clipped.Select(item => $"swing {item.Index}: {item.Strike.ClippedSamples}"))}).";
+        var level = loudest > LoudOk && clipped.Count == 0
+            ? $" Loudest strike peaked at {loudest:0}."
+            : quietest < QuietOk && clipped.Count == 0
+                ? $" Quietest strike peaked at {quietest:0}."
+                : "";
+        advice.GainAdvice = $"Turn the mic gain {direction} {KnobAmount(factor)}.{WindowsAmount(windowsLevel, factor)}{clips}{level} Recalibrate after you change it.";
+        advice.Warnings.Add(advice.GainAdvice);
+    }
+
+    private static string KnobAmount(double factor)
+    {
+        var db = Math.Abs(20 * Math.Log10(factor));
+        if (factor < 1)
+        {
+            if (db < 4.5)
+            {
+                return "a little (about 3 dB)";
+            }
+
+            if (db < 7.5)
+            {
+                return "about half (6 dB)";
+            }
+
+            if (db < 10.5)
+            {
+                return "to about a third (9 dB)";
+            }
+
+            return "to about a quarter (12 dB)";
+        }
+
+        if (db < 4.5)
+        {
+            return "a little (about 3 dB)";
+        }
+
+        if (db < 7.5)
+        {
+            return "about double (6 dB)";
+        }
+
+        return "about triple (10 dB)";
+    }
+
+    private static string WindowsAmount(double? windowsLevel, double factor)
+    {
+        if (windowsLevel is not double current || current < 1)
+        {
+            return "";
+        }
+
+        if (factor > 1 && current >= 95)
+        {
+            return " The Windows microphone level is already at the top, so use the hardware gain knob.";
+        }
+
+        if (factor < 1 && current <= 15)
+        {
+            return " The Windows microphone level is already low, so use the hardware gain knob.";
+        }
+
+        var suggested = (int)Math.Clamp(Math.Round(current * factor), 5, 100);
+        if (Math.Abs(suggested - current) < 2)
+        {
+            return "";
+        }
+
+        return $" Or set the Windows microphone level from {current:0} to {suggested}.";
+    }
+
     public static float[] Trace(float[] interleaved, int channels, int sampleRate, double bucketMs)
     {
-        var meter = Meter(interleaved, channels);
+        var filtered = new float[interleaved.Length];
+        var filter = new HighPassFilter(sampleRate, Math.Max(1, channels));
+        for (var i = 0; i < interleaved.Length; i++)
+        {
+            filtered[i] = filter.Process(interleaved[i], i % filter.Channels);
+        }
+
+        var meter = Meter(filtered, channels);
         var bucket = Math.Max(1, (int)Math.Round(sampleRate * bucketMs / 1000));
         var trace = new float[(meter.Length + bucket - 1) / bucket];
         for (var i = 0; i < meter.Length; i++)
@@ -389,6 +524,12 @@ public static class SoundAnalysis
         return Math.Min(peak, 1) * 100;
     }
 
+    public static double HighPassMeterPeak(float[] interleaved, int channels, int sampleRate)
+    {
+        var filter = new HighPassFilter(sampleRate, Math.Max(1, channels));
+        return filter.Peak(interleaved, int.MaxValue);
+    }
+
     private static void AssignRoles(List<SoundEvent> events, double detectLevel)
     {
         if (events.Count == 0)
@@ -396,10 +537,10 @@ public static class SoundAnalysis
             return;
         }
 
-        var strikeIndex = events.FindIndex(sound => sound.MeterPeak >= detectLevel * 0.99);
+        var strikeIndex = events.FindIndex(sound => sound.HighPassMeterPeak >= detectLevel * 0.99);
         if (strikeIndex < 0)
         {
-            strikeIndex = events.IndexOf(events.MaxBy(sound => sound.MeterPeak)!);
+            strikeIndex = events.IndexOf(events.MaxBy(sound => sound.HighPassMeterPeak)!);
         }
 
         var strike = events[strikeIndex];

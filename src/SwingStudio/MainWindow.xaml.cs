@@ -1207,6 +1207,7 @@ public partial class MainWindow : Window
         var microphone = string.IsNullOrEmpty(_levelMeter.DeviceId) ? null : (MicrophoneList.SelectedItem as MicrophoneChoice)?.Name;
         var calibration = new CalibrationHost(
             microphone,
+            _levelMeter.DeviceId,
             tap => _audioTap = tap,
             on => _calibrating = on);
         var dialog = new SettingsWindow(_settings, calibration) { Owner = this };

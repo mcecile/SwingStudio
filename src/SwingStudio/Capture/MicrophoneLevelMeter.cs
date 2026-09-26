@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using NAudio.CoreAudioApi;
 using NAudio.Wave;
+using SwingStudio.Session;
 
 namespace SwingStudio.Capture;
 
@@ -14,6 +15,7 @@ public sealed class MicrophoneLevelMeter : IDisposable
     private Action<double>? _onLevel;
     private Action<byte[], WaveFormat>? _onAudio;
     private WaveFormat? _format;
+    private HighPassFilter? _highPass;
     private int _generation;
     private float _pendingPeak;
     private long _nextReport;
@@ -56,7 +58,8 @@ public sealed class MicrophoneLevelMeter : IDisposable
                 }
 
                 _format = recorder.WaveFormat;
-                Log.Info($"Microphone started: {device.FriendlyName}, {_format.SampleRate} Hz, {_format.Channels} channel(s), {_format.BitsPerSample}-bit {_format.Encoding}, {(raw ? "raw" : "processed")}.");
+                _highPass = new HighPassFilter(_format.SampleRate, _format.Channels);
+                Log.Info($"Microphone started: {device.FriendlyName}, {_format.SampleRate} Hz, {_format.Channels} channel(s), {_format.BitsPerSample}-bit {_format.Encoding}, {(raw ? "raw" : "processed")}, trigger above {HighPassFilter.CutoffHz:0} Hz.");
                 _enumerator = enumerator;
                 _device = device;
                 _recorder = recorder;
@@ -87,6 +90,7 @@ public sealed class MicrophoneLevelMeter : IDisposable
             _device = null;
             _enumerator = null;
             _format = null;
+            _highPass = null;
             DeviceId = null;
             _onAudio = null;
             _pendingPeak = 0;
@@ -195,9 +199,15 @@ public sealed class MicrophoneLevelMeter : IDisposable
             return;
         }
 
-        _onAudio?.Invoke(buffer.ToArray(), format);
-
-        var peak = (float)PeakLevel(buffer, format);
+        var data = buffer.ToArray();
+        _onAudio?.Invoke(data, format);
+        float peak;
+        lock (_gate)
+        {
+            peak = _highPass is null
+                ? (float)PeakLevel(data, format)
+                : _highPass.Peak(TakeWriter.ToFloat(data, format), Math.Max(1, (int)(format.SampleRate * 0.05)));
+        }
         var now = Stopwatch.GetTimestamp();
         float report;
         lock (_gate)

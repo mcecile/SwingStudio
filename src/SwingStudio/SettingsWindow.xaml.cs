@@ -21,7 +21,7 @@ public partial class SettingsWindow : Window
         _calibration = calibration;
         InitializeComponent();
         CalibrateButton.IsEnabled = calibration?.HasMicrophone == true;
-        CalibrateHint.Text = CalibrateButton.IsEnabled ? "3 swings with the mic in place" : "Choose a working microphone first.";
+        CalibrateHint.Text = CalibrateButton.IsEnabled ? "3 swings; listens above 2 kHz" : "Choose a working microphone first.";
         ThresholdSlider.Value = Math.Clamp(settings.TriggerThreshold, 0, 100);
         SecondsBefore.Text = settings.SecondsBeforeImpact.ToString("0.0", CultureInfo.InvariantCulture);
         SecondsAfter.Text = settings.SecondsAfterImpact.ToString("0.0", CultureInfo.InvariantCulture);

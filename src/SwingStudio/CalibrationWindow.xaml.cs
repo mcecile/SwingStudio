@@ -30,6 +30,7 @@ public partial class CalibrationWindow : Window
     private readonly int _offsetAtStart;
     private readonly string _folder;
     private readonly Recorder _recorder = new();
+    private HighPassFilter? _liveFilter;
     private readonly DispatcherTimer _timeout = new() { Interval = TimeSpan.FromSeconds(30) };
     private readonly DateTimeOffset _started = DateTimeOffset.Now;
     private readonly float[]?[] _swings = new float[SwingCount][];
@@ -62,7 +63,7 @@ public partial class CalibrationWindow : Window
         _timeout.Tick += (_, _) => OnTimeout();
         Closing += (_, _) => OnClosing();
         ShowReady();
-        Log.Info($"Calibration started with {host.MicrophoneName}; threshold {_thresholdAtStart}, offset {_offsetAtStart} ms.");
+        Log.Info($"Calibration started with {host.MicrophoneName}; threshold {_thresholdAtStart}, offset {_offsetAtStart} ms, trigger above {HighPassFilter.CutoffHz:0} Hz.");
         _host.Begin(OnAudio);
     }
 
@@ -72,7 +73,12 @@ public partial class CalibrationWindow : Window
     {
         var samples = TakeWriter.ToFloat(data, format);
         var (start, end) = _recorder.Add(samples, format);
-        var peak = SoundAnalysis.MeterPeak(samples);
+        if (_liveFilter is null || _liveFilter.SampleRate != format.SampleRate || _liveFilter.Channels != format.Channels)
+        {
+            _liveFilter = new HighPassFilter(format.SampleRate, format.Channels);
+        }
+
+        var peak = _liveFilter.Peak(samples, format.SampleRate);
         Dispatcher.BeginInvoke(() => OnPacket(peak, start, end));
     }
 
@@ -156,11 +162,11 @@ public partial class CalibrationWindow : Window
     {
         var (samples, _) = _recorder.Take(_roomStart, _roomEnd);
         _room = samples;
-        _roomPeak = SoundAnalysis.MeterPeak(samples);
+        _roomPeak = SoundAnalysis.HighPassMeterPeak(samples, _recorder.Channels, _recorder.SampleRate);
         _detectLevel = Math.Clamp(Math.Max(_roomPeak * 4, 5), 5, 95);
         _dirty = true;
-        RoomStatus.Text = $"Room noise: loudest {_roomPeak:0.#}. A sound above {_detectLevel:0} counts as a swing.";
-        Log.Info(string.Create(CultureInfo.InvariantCulture, $"Calibration room noise recorded: loudest {_roomPeak:0.##}, swing detect level {_detectLevel:0.##}."));
+        RoomStatus.Text = $"Room noise above 2 kHz: loudest {_roomPeak:0.#}. A sound above {_detectLevel:0} counts as a swing.";
+        Log.Info(string.Create(CultureInfo.InvariantCulture, $"Calibration room noise recorded: loudest {_roomPeak:0.##} above 2 kHz, swing detect level {_detectLevel:0.##}."));
         StartSwing(NextMissing());
     }
 
@@ -171,7 +177,7 @@ public partial class CalibrationWindow : Window
         Prompt.Text = $"Hit ball {index + 1} of {SwingCount}";
         Detail.Text = _roomPeak * 4 > 95
             ? "The room is very loud for this mic; swings may not stand out. Swing normally. Waiting up to 30 seconds."
-            : $"Swing normally. A sound above {_detectLevel:0} on the meter counts as the strike. Waiting up to 30 seconds.";
+            : $"Swing normally. A sound above {_detectLevel:0} above 2 kHz counts as the strike. Waiting up to 30 seconds.";
         _swingStatus[index].Text = $"Swing {index + 1}: waiting…";
         ActionButton.Visibility = Visibility.Collapsed;
         ReviewPanel.Visibility = Visibility.Collapsed;
@@ -206,7 +212,7 @@ public partial class CalibrationWindow : Window
         _swings[index] = samples;
         _swingDetected[index] = _eventFrame - start;
         _dirty = true;
-        var peak = SoundAnalysis.MeterPeak(samples);
+        var peak = SoundAnalysis.HighPassMeterPeak(samples, _recorder.Channels, _recorder.SampleRate);
         _swingStatus[index].Text = $"Swing {index + 1}: heard, peak {peak:0.#}";
         Log.Info(string.Create(CultureInfo.InvariantCulture, $"Calibration swing {index + 1} captured: peak {peak:0.##}, {samples.Length / _recorder.Channels} frames."));
         var next = NextMissing();
@@ -263,7 +269,7 @@ public partial class CalibrationWindow : Window
             }
         }
 
-        report.Advice = SoundAnalysis.Recommend(report.Room, report.Swings, channels);
+        report.Advice = SoundAnalysis.Recommend(report.Room, report.Swings, channels, _host.WindowsCaptureLevel());
         return report;
     }
 
@@ -291,7 +297,8 @@ public partial class CalibrationWindow : Window
         if (advice.ProposedThreshold is int proposed)
         {
             var margin = advice.Margin is double value ? $"{value:0.0}x" : "no room noise measured";
-            Summary.Text = $"Proposed threshold: {proposed} (currently {_thresholdAtStart}). Loudest room sound {advice.RoomMeterPeak:0.#}; strikes {advice.QuietestStrike:0.#} to {advice.LoudestStrike:0.#}; margin {margin}.";
+            var gain = string.IsNullOrEmpty(advice.GainAdvice) ? "" : " " + advice.GainAdvice;
+            Summary.Text = $"Proposed threshold: {proposed} (currently {_thresholdAtStart}). Loudest room sound {advice.RoomMeterPeak:0.#}; strikes {advice.QuietestStrike:0.#} to {advice.LoudestStrike:0.#}; margin {margin}.{gain}";
         }
         else
         {

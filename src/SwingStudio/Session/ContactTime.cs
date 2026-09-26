@@ -17,9 +17,10 @@ public static class ContactTime
             return Clamp(fallback, takeLengthMs);
         }
 
-        var triggerIndex = SampleIndex(triggerMs - audioStartMs, sampleRate, samples.Length);
+        var filtered = HighPassFilter.Apply(samples, sampleRate);
+        var triggerIndex = SampleIndex(triggerMs - audioStartMs, sampleRate, filtered.Length);
         var levelThreshold = (float)(Math.Clamp(threshold, 0, 100) / 100d);
-        var onset = OnsetSample(samples, sampleRate, triggerIndex, levelThreshold);
+        var onset = OnsetSample(filtered, sampleRate, triggerIndex, levelThreshold);
         if (onset < 0)
         {
             Log.Warn($"No recorded sample reached threshold {threshold:0} near the trigger; contact uses the trigger time.");

@@ -13,7 +13,7 @@
         <TextBlock x:Name="Detail" Foreground="#A0A0A0" TextWrapping="Wrap" Margin="0,6,0,12" />
 
         <DockPanel Margin="0,0,0,12">
-            <TextBlock Text="Mic level" Foreground="#C8C8C8" VerticalAlignment="Center" Width="72" />
+            <TextBlock Text="Above 2 kHz" Foreground="#C8C8C8" VerticalAlignment="Center" Width="72" />
             <TextBlock x:Name="LevelValue" DockPanel.Dock="Right" Foreground="#E6E6E6" Width="36" TextAlignment="Right" VerticalAlignment="Center" />
             <ProgressBar x:Name="Level" Height="10" Minimum="0" Maximum="100" AutomationProperties.Name="Calibration mic level" />
         </DockPanel>

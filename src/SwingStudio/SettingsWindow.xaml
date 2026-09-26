@@ -48,7 +48,7 @@
                 <ColumnDefinition Width="160" />
             </Grid.ColumnDefinitions>
             <StackPanel>
-                <TextBlock Text="Trigger threshold" Foreground="#C8C8C8" Margin="0,0,0,6" />
+                <TextBlock Text="Trigger threshold (above 2 kHz)" Foreground="#C8C8C8" Margin="0,0,0,6" />
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
