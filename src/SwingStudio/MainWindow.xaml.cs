@@ -81,6 +81,7 @@ public partial class MainWindow : Window
     private int _resumeAttempts;
     private int _restartAttempts;
     private bool _restartingCameras;
+    private bool _inUseDialogShown;
     private bool _previewAFailed;
     private bool _previewBFailed;
 
@@ -92,8 +93,8 @@ public partial class MainWindow : Window
         InitializeComponent();
         AppVersion.Text = ProductVersion();
         Log.Info($"Settings: session folder {_settings.SessionFolder}, keep {NormalizedSwingsToKeep()} unsaved, capture {_settings.CaptureWidth}x{_settings.CaptureHeight} {_settings.CaptureFramesPerSecond:0.##} fps {_settings.CaptureFourCc}, trigger {TriggerSources.Normalize(_settings.TriggerSource)}, threshold {_settings.TriggerThreshold}, window {_settings.SecondsBeforeImpact:0.0} s before / {_settings.SecondsAfterImpact:0.0} s after.");
-        _previewA = new CameraPreview("Camera A", Dispatcher, ShowFrameA, message => ShowPreviewError(true, message), () => RequestCameraRestart("Camera A is delivering frames too slowly."));
-        _previewB = new CameraPreview("Camera B", Dispatcher, ShowFrameB, message => ShowPreviewError(false, message), () => RequestCameraRestart("Camera B is delivering frames too slowly."));
+        _previewA = new CameraPreview("Camera A", Dispatcher, ShowFrameA, message => ShowPreviewError(true, message), () => OnCameraStalled());
+        _previewB = new CameraPreview("Camera B", Dispatcher, ShowFrameB, message => ShowPreviewError(false, message), () => OnCameraStalled());
         _bufferTimer.Tick += (_, _) => ShowBufferStatus();
         _bufferTimer.Start();
         _resumeTimer.Tick += (_, _) => RetryResumeRecovery();
@@ -568,6 +569,65 @@ public partial class MainWindow : Window
         ShowMicrophone();
         ApplyTriggerSource();
         RequestCameraRestart("Reopening the cameras after sleep.");
+    }
+
+    private void OnCameraStalled()
+    {
+        if (_closing || _inUseDialogShown)
+        {
+            return;
+        }
+
+        _inUseDialogShown = true;
+        var pathA = _settings.CameraADevicePath;
+        var pathB = _settings.CameraBDevicePath;
+        Task.Run(() =>
+        {
+            var occupants = new Dictionary<int, CameraOccupant>();
+            foreach (var occupant in CameraOccupants.Find(pathA))
+            {
+                occupants[occupant.ProcessId] = occupant;
+            }
+
+            if (!string.Equals(pathA, pathB, StringComparison.OrdinalIgnoreCase))
+            {
+                foreach (var occupant in CameraOccupants.Find(pathB))
+                {
+                    occupants[occupant.ProcessId] = occupant;
+                }
+            }
+
+            Dispatcher.BeginInvoke(() => ShowCameraInUse(occupants.Values.ToList()));
+        });
+    }
+
+    private void ShowCameraInUse(IReadOnlyList<CameraOccupant> occupants)
+    {
+        if (_closing)
+        {
+            return;
+        }
+
+        string message;
+        if (occupants.Count > 0)
+        {
+            var names = string.Join(", ", occupants.Select(occupant => occupant.Name));
+            Log.Warn($"The cameras are already open in {names}.");
+            message = occupants.Count == 1
+                ? $"{occupants[0].Name} already has these cameras. Close that app, then reopen SwingStudio."
+                : $"{names} already have these cameras. Close those apps, then reopen SwingStudio.";
+            StatusDetail.Text = occupants.Count == 1
+                ? $"{occupants[0].Name} already has the cameras."
+                : "Another app already has the cameras.";
+        }
+        else
+        {
+            Log.Warn("The cameras stayed at a low frame rate. No other app was found using them.");
+            message = "The cameras are only delivering about 1 frame per second. Another app may already have them. Close ProTee Labs swing cameras if they are still assigned, then reopen SwingStudio.";
+            StatusDetail.Text = "The cameras stayed at a low frame rate.";
+        }
+
+        MessageBox.Show(this, message, "SwingStudio", MessageBoxButton.OK, MessageBoxImage.Warning);
     }
 
     private void RequestCameraRestart(string reason)
@@ -1720,6 +1780,7 @@ public partial class MainWindow : Window
         if (framesPerSecond >= 30)
         {
             _restartAttempts = 0;
+            _inUseDialogShown = false;
         }
         stats.Text = framesPerSecond > 0
             ? $"{width}×{height}   {framesPerSecond:0} fps"
