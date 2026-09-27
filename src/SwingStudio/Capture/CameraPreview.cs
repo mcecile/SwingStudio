@@ -76,25 +76,39 @@ public sealed class CameraPreview : IDisposable
 
     private void CaptureLoop(int index, int width, int height, double framesPerSecond, string fourCc, string? devicePath, IReadOnlyDictionary<string, double>? controls, int generation)
     {
-        try
+        while (!_stop && generation == Volatile.Read(ref _generation))
         {
-            ReadFrames(index, width, height, framesPerSecond, fourCc, devicePath, controls, generation);
-        }
-        catch (Exception ex)
-        {
-            Log.Error($"{_label} capture stopped with an error.", ex);
-            ReportError(generation, ex.Message);
+            try
+            {
+                if (!ReadFrames(index, width, height, framesPerSecond, fourCc, devicePath, controls, generation))
+                {
+                    return;
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"{_label} capture stopped with an error.", ex);
+                ReportError(generation, ex.Message);
+                return;
+            }
+
+            if (_stop || generation != Volatile.Read(ref _generation))
+            {
+                return;
+            }
+
+            Thread.Sleep(500);
         }
     }
 
-    private void ReadFrames(int index, int width, int height, double framesPerSecond, string fourCc, string? devicePath, IReadOnlyDictionary<string, double>? controls, int generation)
+    private bool ReadFrames(int index, int width, int height, double framesPerSecond, string fourCc, string? devicePath, IReadOnlyDictionary<string, double>? controls, int generation)
     {
         using var capture = new VideoCapture(index, VideoCaptureAPIs.DSHOW);
         if (!capture.IsOpened())
         {
             Log.Error($"{_label} did not open (DirectShow index {index}).");
             ReportError(generation, "The camera did not open.");
-            return;
+            return false;
         }
 
         // DirectShow drops back to the default FourCC whenever width, height, or fps is set, so FourCC goes last.
@@ -118,6 +132,7 @@ public sealed class CameraPreview : IDisposable
         var firstFrameLogged = false;
         var loggedFps = 0d;
         var fpsLogClock = Stopwatch.StartNew();
+        var openedAt = Stopwatch.StartNew();
 
         while (!_stop && generation == Volatile.Read(ref _generation))
         {
@@ -138,7 +153,15 @@ public sealed class CameraPreview : IDisposable
                 });
             }
 
-            if (!capture.Read(frame) || frame.Empty())
+            var readWatch = Stopwatch.StartNew();
+            var gotFrame = capture.Read(frame) && !frame.Empty();
+            if (firstFrameLogged && openedAt.Elapsed > TimeSpan.FromSeconds(5) && readWatch.ElapsedMilliseconds >= 500)
+            {
+                Log.Warn($"{_label} frame read took {readWatch.ElapsedMilliseconds} ms. Opening the camera again.");
+                return true;
+            }
+
+            if (!gotFrame)
             {
                 continue;
             }
@@ -190,6 +213,8 @@ public sealed class CameraPreview : IDisposable
                 }
             });
         }
+
+        return false;
     }
 
     private void PublishFrame(VideoCapture? capture, Mat? frame, int generation)

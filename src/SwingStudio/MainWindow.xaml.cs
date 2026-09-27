@@ -2,6 +2,7 @@
 using System.Globalization;
 using System.Reflection;
 using System.Windows;
+using Microsoft.Win32;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -38,6 +39,7 @@ public partial class MainWindow : Window
     private readonly AudioRing _audio = new();
     private readonly DispatcherTimer _bufferTimer = new() { Interval = TimeSpan.FromMilliseconds(200) };
     private readonly DispatcherTimer _playbackTimer = new() { Interval = TimeSpan.FromMilliseconds(33) };
+    private readonly DispatcherTimer _resumeTimer = new() { Interval = TimeSpan.FromSeconds(3) };
     private readonly Stopwatch _playbackClock = new();
     private IReadOnlyList<CameraDevice> _cameras = [];
     private bool _suppressSelection;
@@ -76,6 +78,9 @@ public partial class MainWindow : Window
     private double _audioClockMs;
     private bool _calibrating;
     private string? _launchMonitorStatus;
+    private int _resumeAttempts;
+    private bool _previewAFailed;
+    private bool _previewBFailed;
 
     private bool IsLaunchMonitor => TriggerSources.IsLaunchMonitor(_settings.TriggerSource);
 
@@ -89,6 +94,8 @@ public partial class MainWindow : Window
         _previewB = new CameraPreview("Camera B", Dispatcher, ShowFrameB, message => ShowPreviewError(false, message));
         _bufferTimer.Tick += (_, _) => ShowBufferStatus();
         _bufferTimer.Start();
+        _resumeTimer.Tick += (_, _) => RetryResumeRecovery();
+        SystemEvents.PowerModeChanged += OnPowerModeChanged;
         _playbackTimer.Tick += (_, _) => AdvancePlayback();
         CameraADraw.SizeChanged += (_, _) => RedrawDrawings();
         CameraBDraw.SizeChanged += (_, _) => RedrawDrawings();
@@ -115,6 +122,8 @@ public partial class MainWindow : Window
         {
             _bufferTimer.Stop();
             _playbackTimer.Stop();
+            _resumeTimer.Stop();
+            SystemEvents.PowerModeChanged -= OnPowerModeChanged;
             _closing = true;
             _launchMonitor.Dispose();
             DisposePendingTakes();
@@ -455,6 +464,112 @@ public partial class MainWindow : Window
         {
             StatusDetail.Text = _launchMonitorStatus;
         }
+    }
+
+    private void OnPowerModeChanged(object? sender, PowerModeChangedEventArgs e)
+    {
+        if (e.Mode != PowerModes.Resume || _closing)
+        {
+            return;
+        }
+
+        Log.Info("The computer resumed from sleep.");
+        Dispatcher.BeginInvoke(BeginResumeRecovery);
+    }
+
+    private void BeginResumeRecovery()
+    {
+        if (_closing)
+        {
+            return;
+        }
+
+        _resumeAttempts = 0;
+        _resumeTimer.Stop();
+        RecoverCapture();
+        _resumeTimer.Start();
+    }
+
+    private void RetryResumeRecovery()
+    {
+        _resumeAttempts++;
+        if (_closing || _resumeAttempts > 5 || CaptureIsReady())
+        {
+            _resumeTimer.Stop();
+            return;
+        }
+
+        Log.Info("Capture is not ready after sleep. Opening it again.");
+        if (!CamerasReady())
+        {
+            RefreshCameras();
+            ApplyPane(true);
+            ApplyPane(false);
+        }
+
+        if (!string.IsNullOrEmpty(_settings.MicrophoneDeviceId) && string.IsNullOrEmpty(_levelMeter.DeviceId))
+        {
+            _levelMeter.Stop();
+            _audio.Clear();
+            ShowMicrophone();
+        }
+
+        if (_launchMonitorStatus is LaunchMonitorAdapterStatus or LaunchMonitorOpenStatus)
+        {
+            ApplyTriggerSource();
+        }
+    }
+
+    private bool CamerasReady()
+    {
+        if (!string.IsNullOrEmpty(_settings.CameraADevicePath) && (_previewAFailed || !_cameras.Any(camera => camera.DevicePath == _settings.CameraADevicePath)))
+        {
+            return false;
+        }
+
+        return string.IsNullOrEmpty(_settings.CameraBDevicePath) || (!_previewBFailed && _cameras.Any(camera => camera.DevicePath == _settings.CameraBDevicePath));
+    }
+
+    private bool CaptureIsReady()
+    {
+        if (!CamerasReady())
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrEmpty(_settings.MicrophoneDeviceId) && string.IsNullOrEmpty(_levelMeter.DeviceId))
+        {
+            return false;
+        }
+
+        return _launchMonitorStatus is not LaunchMonitorAdapterStatus and not LaunchMonitorOpenStatus;
+    }
+
+    private void RecoverCapture()
+    {
+        if (_showingTake)
+        {
+            EndPlayback();
+        }
+
+        lock (_strikeGate)
+        {
+            _strikeActive = false;
+        }
+
+        if (StatusDetail.Text == StrikeStatus)
+        {
+            StatusDetail.Text = "";
+        }
+
+        _levelMeter.Stop();
+        _audio.Clear();
+        ShowMicrophone();
+        ApplyTriggerSource();
+        RefreshCameras();
+        ApplyPane(true);
+        ApplyPane(false);
+        Log.Info("Reopened the cameras after sleep.");
     }
 
     private double RetentionSeconds()
@@ -1409,6 +1524,14 @@ public partial class MainWindow : Window
         stats.Text = "";
         gear.IsEnabled = false;
         tools.Visibility = Visibility.Collapsed;
+        if (isA)
+        {
+            _previewAFailed = false;
+        }
+        else
+        {
+            _previewBFailed = false;
+        }
 
         if (string.IsNullOrEmpty(path))
         {
@@ -1426,6 +1549,15 @@ public partial class MainWindow : Window
             LeaveDrawMode(isA);
             picker.Visibility = Visibility.Visible;
             message.Text = "Saved camera was not found.";
+            if (isA)
+            {
+                _previewAFailed = true;
+            }
+            else
+            {
+                _previewBFailed = true;
+            }
+
             return;
         }
 
@@ -1534,6 +1666,14 @@ public partial class MainWindow : Window
         var picker = isA ? CameraAPicker : CameraBPicker;
         var error = isA ? CameraAMessage : CameraBMessage;
         var stats = isA ? CameraAStats : CameraBStats;
+        if (isA)
+        {
+            _previewAFailed = true;
+        }
+        else
+        {
+            _previewBFailed = true;
+        }
         picker.Visibility = Visibility.Visible;
         error.Text = message;
         stats.Text = "";
