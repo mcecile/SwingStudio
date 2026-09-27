@@ -79,6 +79,8 @@ public partial class MainWindow : Window
     private bool _calibrating;
     private string? _launchMonitorStatus;
     private int _resumeAttempts;
+    private int _restartAttempts;
+    private bool _restartingCameras;
     private bool _previewAFailed;
     private bool _previewBFailed;
 
@@ -90,8 +92,8 @@ public partial class MainWindow : Window
         InitializeComponent();
         AppVersion.Text = ProductVersion();
         Log.Info($"Settings: session folder {_settings.SessionFolder}, keep {NormalizedSwingsToKeep()} unsaved, capture {_settings.CaptureWidth}x{_settings.CaptureHeight} {_settings.CaptureFramesPerSecond:0.##} fps {_settings.CaptureFourCc}, trigger {TriggerSources.Normalize(_settings.TriggerSource)}, threshold {_settings.TriggerThreshold}, window {_settings.SecondsBeforeImpact:0.0} s before / {_settings.SecondsAfterImpact:0.0} s after.");
-        _previewA = new CameraPreview("Camera A", Dispatcher, ShowFrameA, message => ShowPreviewError(true, message));
-        _previewB = new CameraPreview("Camera B", Dispatcher, ShowFrameB, message => ShowPreviewError(false, message));
+        _previewA = new CameraPreview("Camera A", Dispatcher, ShowFrameA, message => ShowPreviewError(true, message), () => RequestCameraRestart("Camera A is delivering frames too slowly."));
+        _previewB = new CameraPreview("Camera B", Dispatcher, ShowFrameB, message => ShowPreviewError(false, message), () => RequestCameraRestart("Camera B is delivering frames too slowly."));
         _bufferTimer.Tick += (_, _) => ShowBufferStatus();
         _bufferTimer.Start();
         _resumeTimer.Tick += (_, _) => RetryResumeRecovery();
@@ -485,6 +487,7 @@ public partial class MainWindow : Window
         }
 
         _resumeAttempts = 0;
+        _restartAttempts = 0;
         _resumeTimer.Stop();
         RecoverCapture();
         _resumeTimer.Start();
@@ -502,9 +505,7 @@ public partial class MainWindow : Window
         Log.Info("Capture is not ready after sleep. Opening it again.");
         if (!CamerasReady())
         {
-            RefreshCameras();
-            ApplyPane(true);
-            ApplyPane(false);
+            RequestCameraRestart("The cameras were not ready after sleep.");
         }
 
         if (!string.IsNullOrEmpty(_settings.MicrophoneDeviceId) && string.IsNullOrEmpty(_levelMeter.DeviceId))
@@ -566,10 +567,89 @@ public partial class MainWindow : Window
         _audio.Clear();
         ShowMicrophone();
         ApplyTriggerSource();
+        RequestCameraRestart("Reopening the cameras after sleep.");
+    }
+
+    private void RequestCameraRestart(string reason)
+    {
+        if (_closing || _restartingCameras)
+        {
+            return;
+        }
+
+        if (_restartAttempts >= 2)
+        {
+            StatusDetail.Text = "The cameras stayed at a low frame rate.";
+            return;
+        }
+
+        _restartAttempts++;
+        _restartingCameras = true;
+        Log.Warn(reason);
+        RestartCameras();
+    }
+
+    private void RestartCameras()
+    {
+        _previewA.Stop();
+        _previewB.Stop();
+        StatusDetail.Text = "Restarting cameras…";
+        var pathA = _settings.CameraADevicePath;
+        var pathB = _settings.CameraBDevicePath;
+        Task.Run(() =>
+        {
+            var restarted = false;
+            if (!string.IsNullOrEmpty(pathA))
+            {
+                restarted = CameraDeviceRestart.Restart(pathA) is not null;
+            }
+
+            if (!string.IsNullOrEmpty(pathB) && !string.Equals(pathA, pathB, StringComparison.OrdinalIgnoreCase))
+            {
+                restarted |= CameraDeviceRestart.Restart(pathB) is not null;
+            }
+
+            Thread.Sleep(1000);
+            var found = false;
+            for (var attempt = 0; attempt < 20 && !_closing; attempt++)
+            {
+                var cameras = CameraEnumerator.List();
+                var readyA = string.IsNullOrEmpty(pathA) || cameras.Any(camera => string.Equals(camera.DevicePath, pathA, StringComparison.OrdinalIgnoreCase));
+                var readyB = string.IsNullOrEmpty(pathB) || cameras.Any(camera => string.Equals(camera.DevicePath, pathB, StringComparison.OrdinalIgnoreCase));
+                if (readyA && readyB)
+                {
+                    found = true;
+                    break;
+                }
+
+                Thread.Sleep(500);
+            }
+
+            Dispatcher.BeginInvoke(() => FinishCameraRestart(found, restarted));
+        });
+    }
+
+    private void FinishCameraRestart(bool found, bool restarted)
+    {
+        _restartingCameras = false;
+        if (_closing)
+        {
+            return;
+        }
+
+        if (!restarted)
+        {
+            Log.Warn("Windows would not restart the cameras.");
+            StatusDetail.Text = "Windows would not restart the cameras.";
+        }
+        else if (!found)
+        {
+            Log.Warn("The cameras did not come back after a restart.");
+        }
+
         RefreshCameras();
         ApplyPane(true);
         ApplyPane(false);
-        Log.Info("Reopened the cameras after sleep.");
     }
 
     private double RetentionSeconds()
@@ -1331,7 +1411,8 @@ public partial class MainWindow : Window
     private static bool IsBusyStatus(string text) =>
         text is StrikeStatus or PausedStatus
         || text.StartsWith("Replay ", StringComparison.Ordinal)
-        || text.StartsWith("Saving ", StringComparison.Ordinal);
+        || text.StartsWith("Saving ", StringComparison.Ordinal)
+        || text.StartsWith("Restarting ", StringComparison.Ordinal);
 
     private static string StatusFor(LaunchMonitorWatchState state) => state switch
     {
@@ -1636,6 +1717,10 @@ public partial class MainWindow : Window
 
         image.Source = bitmap;
         picker.Visibility = Visibility.Collapsed;
+        if (framesPerSecond >= 30)
+        {
+            _restartAttempts = 0;
+        }
         stats.Text = framesPerSecond > 0
             ? $"{width}×{height}   {framesPerSecond:0} fps"
             : $"{width}×{height}";

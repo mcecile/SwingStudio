@@ -13,6 +13,7 @@ public sealed class CameraPreview : IDisposable
     private readonly Dispatcher _dispatcher;
     private readonly Action<BitmapSource, int, int, double> _onFrame;
     private readonly Action<string> _onError;
+    private readonly Action _onStalled;
     private readonly string _label;
     private Thread? _thread;
     private int _generation;
@@ -27,13 +28,15 @@ public sealed class CameraPreview : IDisposable
     private TimerProc? _dialogTimer;
     private nuint _dialogTimerId;
     private bool _dialogErrorLogged;
+    private bool _reportedSlow;
 
-    public CameraPreview(string label, Dispatcher dispatcher, Action<BitmapSource, int, int, double> onFrame, Action<string> onError)
+    public CameraPreview(string label, Dispatcher dispatcher, Action<BitmapSource, int, int, double> onFrame, Action<string> onError, Action onStalled)
     {
         _label = label;
         _dispatcher = dispatcher;
         _onFrame = onFrame;
         _onError = onError;
+        _onStalled = onStalled;
     }
 
     public void Start(int index, int width, int height, double framesPerSecond, string fourCc, string? devicePath, IReadOnlyDictionary<string, double>? controls, Action<Mat>? onCaptured = null)
@@ -41,6 +44,7 @@ public sealed class CameraPreview : IDisposable
         Stop();
         _stop = false;
         _showSettings = false;
+        _reportedSlow = false;
         _onCaptured = onCaptured;
         var generation = Interlocked.Increment(ref _generation);
         _thread = new Thread(() => CaptureLoop(index, width, height, framesPerSecond, fourCc, devicePath, controls, generation))
@@ -76,39 +80,25 @@ public sealed class CameraPreview : IDisposable
 
     private void CaptureLoop(int index, int width, int height, double framesPerSecond, string fourCc, string? devicePath, IReadOnlyDictionary<string, double>? controls, int generation)
     {
-        while (!_stop && generation == Volatile.Read(ref _generation))
+        try
         {
-            try
-            {
-                if (!ReadFrames(index, width, height, framesPerSecond, fourCc, devicePath, controls, generation))
-                {
-                    return;
-                }
-            }
-            catch (Exception ex)
-            {
-                Log.Error($"{_label} capture stopped with an error.", ex);
-                ReportError(generation, ex.Message);
-                return;
-            }
-
-            if (_stop || generation != Volatile.Read(ref _generation))
-            {
-                return;
-            }
-
-            Thread.Sleep(500);
+            ReadFrames(index, width, height, framesPerSecond, fourCc, devicePath, controls, generation);
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"{_label} capture stopped with an error.", ex);
+            ReportError(generation, ex.Message);
         }
     }
 
-    private bool ReadFrames(int index, int width, int height, double framesPerSecond, string fourCc, string? devicePath, IReadOnlyDictionary<string, double>? controls, int generation)
+    private void ReadFrames(int index, int width, int height, double framesPerSecond, string fourCc, string? devicePath, IReadOnlyDictionary<string, double>? controls, int generation)
     {
         using var capture = new VideoCapture(index, VideoCaptureAPIs.DSHOW);
         if (!capture.IsOpened())
         {
             Log.Error($"{_label} did not open (DirectShow index {index}).");
             ReportError(generation, "The camera did not open.");
-            return false;
+            return;
         }
 
         // DirectShow drops back to the default FourCC whenever width, height, or fps is set, so FourCC goes last.
@@ -132,7 +122,6 @@ public sealed class CameraPreview : IDisposable
         var firstFrameLogged = false;
         var loggedFps = 0d;
         var fpsLogClock = Stopwatch.StartNew();
-        var openedAt = Stopwatch.StartNew();
 
         while (!_stop && generation == Volatile.Read(ref _generation))
         {
@@ -153,15 +142,7 @@ public sealed class CameraPreview : IDisposable
                 });
             }
 
-            var readWatch = Stopwatch.StartNew();
-            var gotFrame = capture.Read(frame) && !frame.Empty();
-            if (firstFrameLogged && openedAt.Elapsed > TimeSpan.FromSeconds(5) && readWatch.ElapsedMilliseconds >= 500)
-            {
-                Log.Warn($"{_label} frame read took {readWatch.ElapsedMilliseconds} ms. Opening the camera again.");
-                return true;
-            }
-
-            if (!gotFrame)
+            if (!capture.Read(frame) || frame.Empty())
             {
                 continue;
             }
@@ -172,6 +153,8 @@ public sealed class CameraPreview : IDisposable
             {
                 firstFrameLogged = true;
                 Log.Info($"{_label} first frame {frame.Width}x{frame.Height}, {frame.Channels()} channel(s); driver reports {capture.Get(VideoCaptureProperties.Fps):0.##} fps, FourCC {FourCcText(capture.Get(VideoCaptureProperties.FourCC))}.");
+                clock.Restart();
+                frames = 0;
             }
 
             if (!appliedAfterFrame && controls is not null)
@@ -187,6 +170,19 @@ public sealed class CameraPreview : IDisposable
                 _measuredFps = measuredFps;
                 frames = 0;
                 clock.Restart();
+                if (firstFrameLogged && measuredFps < 5 && !_reportedSlow && !_showSettings)
+                {
+                    _reportedSlow = true;
+                    Log.Warn($"{_label} is only delivering {measuredFps:0.0} fps.");
+                    _dispatcher.BeginInvoke(() =>
+                    {
+                        if (generation == Volatile.Read(ref _generation))
+                        {
+                            _onStalled();
+                        }
+                    });
+                }
+
                 if (loggedFps <= 0 || (Math.Abs(measuredFps - loggedFps) > loggedFps * 0.25 && fpsLogClock.Elapsed > TimeSpan.FromSeconds(10)))
                 {
                     Log.Info($"{_label} measured {measuredFps:0.0} fps (requested {framesPerSecond:0.##}).");
@@ -213,8 +209,6 @@ public sealed class CameraPreview : IDisposable
                 }
             });
         }
-
-        return false;
     }
 
     private void PublishFrame(VideoCapture? capture, Mat? frame, int generation)

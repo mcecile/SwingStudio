@@ -1,5 +1,5 @@
 ---
-description: When the user says "ship it", bump the patch version, build the installer, commit, and push.
+description: When the user says "ship it", bump the patch version, build the installer, copy it to Z:\Download, commit, and push.
 alwaysApply: true
 ---
 
@@ -9,7 +9,8 @@ When the user says **ship it**, do these steps in order without asking for confi
 
 1. Bump only the patch number in `src/SwingStudio/SwingStudio.csproj` (`1.0.8` becomes `1.0.9`). Leave major and minor unchanged unless the user names a different version.
 2. Build the installer with `installer\build.ps1`. If publish fails because `SwingStudio.exe` is locked, stop the running SwingStudio process and run the script again.
-3. Commit the version bump together with the work that belongs to this change. Leave unrelated dirty files out of the commit. Follow the repository commit protocol. Do not edit `settings.json`.
-4. Push with `git push origin HEAD`.
+3. Copy `installer\Output\SwingStudio-Setup-<version>.exe` to `Z:\Download`.
+4. Commit the version bump together with the work that belongs to this change. Leave unrelated dirty files out of the commit. Follow the repository commit protocol. Do not edit `settings.json`.
+5. Push with `git push origin HEAD`.
 
 Do not run these steps unless the user uses that phrase or explicitly asks for the same work.
