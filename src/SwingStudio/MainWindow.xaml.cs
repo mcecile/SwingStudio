@@ -5,6 +5,7 @@ using System.Windows;
 using Microsoft.Win32;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using SwingStudio.Capture;
@@ -112,6 +113,7 @@ public partial class MainWindow : Window
             new System.Windows.Input.MouseButtonEventHandler((_, _) => _scrubbing = false),
             true);
         PlaybackSlider.LostMouseCapture += (_, _) => _scrubbing = false;
+        Loaded += (_, _) => PlayBrandSwoop();
         ShowTransport();
         ShowMicrophone();
         ApplyTriggerSource();
@@ -436,6 +438,7 @@ public partial class MainWindow : Window
 
     private void ApplyTriggerSource()
     {
+        MicrophoneWidgets.Visibility = IsLaunchMonitor ? Visibility.Collapsed : Visibility.Visible;
         _launchMonitor.Stop();
         if (!IsLaunchMonitor)
         {
@@ -1523,6 +1526,57 @@ public partial class MainWindow : Window
     private sealed record MicrophoneChoice(string? Id, string Name, string? StoredName)
     {
         public override string ToString() => Name;
+    }
+
+    private void PlayBrandSwoop()
+    {
+        if (BrandSwoopDraw.Data is not Geometry geometry)
+        {
+            return;
+        }
+
+        var length = 0.0;
+        var flattened = geometry.GetFlattenedPathGeometry();
+        static double Distance(System.Windows.Point start, System.Windows.Point end)
+        {
+            var dx = end.X - start.X;
+            var dy = end.Y - start.Y;
+            return Math.Sqrt((dx * dx) + (dy * dy));
+        }
+        foreach (var figure in flattened.Figures)
+        {
+            var point = figure.StartPoint;
+            foreach (var segment in figure.Segments)
+            {
+                if (segment is LineSegment line)
+                {
+                    length += Distance(point, line.Point);
+                    point = line.Point;
+                }
+                else if (segment is PolyLineSegment poly)
+                {
+                    foreach (var next in poly.Points)
+                    {
+                        length += Distance(point, next);
+                        point = next;
+                    }
+                }
+            }
+        }
+
+        if (length < 1 || BrandSwoopDraw.StrokeThickness < 1)
+        {
+            return;
+        }
+
+        var units = length / BrandSwoopDraw.StrokeThickness;
+        BrandSwoopDraw.StrokeDashArray = new DoubleCollection { units, units };
+        BrandSwoopDraw.BeginAnimation(
+            System.Windows.Shapes.Path.StrokeDashOffsetProperty,
+            new DoubleAnimation(units, 0, TimeSpan.FromMilliseconds(1100))
+            {
+                EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseInOut }
+            });
     }
 
     private void ShowTransport()
