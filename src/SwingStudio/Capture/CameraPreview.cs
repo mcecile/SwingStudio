@@ -122,6 +122,8 @@ public sealed class CameraPreview : IDisposable
         var firstFrameLogged = false;
         var loggedFps = 0d;
         var fpsLogClock = Stopwatch.StartNew();
+        var startupClock = Stopwatch.StartNew();
+        var slowSeconds = 0;
 
         while (!_stop && generation == Volatile.Read(ref _generation))
         {
@@ -154,6 +156,7 @@ public sealed class CameraPreview : IDisposable
                 firstFrameLogged = true;
                 Log.Info($"{_label} first frame {frame.Width}x{frame.Height}, {frame.Channels()} channel(s); driver reports {capture.Get(VideoCaptureProperties.Fps):0.##} fps, FourCC {FourCcText(capture.Get(VideoCaptureProperties.FourCC))}.");
                 clock.Restart();
+                startupClock.Restart();
                 frames = 0;
             }
 
@@ -170,7 +173,23 @@ public sealed class CameraPreview : IDisposable
                 _measuredFps = measuredFps;
                 frames = 0;
                 clock.Restart();
-                if (firstFrameLogged && measuredFps < 5 && !_reportedSlow && !_showSettings)
+
+                if (measuredFps < 5)
+                {
+                    slowSeconds++;
+                }
+                else
+                {
+                    slowSeconds = 0;
+                    if (measuredFps >= 10)
+                    {
+                        _reportedSlow = false;
+                    }
+                }
+
+                // Allow 4 seconds of warmup after the first frame before flagging as stalled,
+                // and require at least 3 consecutive slow seconds under 5 fps.
+                if (firstFrameLogged && startupClock.ElapsedMilliseconds >= 4000 && slowSeconds >= 3 && !_reportedSlow && !_showSettings)
                 {
                     _reportedSlow = true;
                     Log.Warn($"{_label} is only delivering {measuredFps:0.0} fps.");

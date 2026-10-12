@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.Globalization;
 using System.Reflection;
 using System.Windows;
@@ -40,7 +40,7 @@ public partial class MainWindow : Window
     private readonly AudioRing _audio = new();
     private readonly DispatcherTimer _bufferTimer = new() { Interval = TimeSpan.FromMilliseconds(200) };
     private readonly DispatcherTimer _playbackTimer = new() { Interval = TimeSpan.FromMilliseconds(33) };
-    private readonly DispatcherTimer _resumeTimer = new() { Interval = TimeSpan.FromSeconds(3) };
+    private readonly DispatcherTimer _resumeTimer = new() { Interval = TimeSpan.FromSeconds(5) };
     private readonly Stopwatch _playbackClock = new();
     private IReadOnlyList<CameraDevice> _cameras = [];
     private bool _suppressSelection;
@@ -82,6 +82,7 @@ public partial class MainWindow : Window
     private int _resumeAttempts;
     private int _restartAttempts;
     private bool _restartingCameras;
+    private Stopwatch? _resumedAt;
     private bool _inUseDialogShown;
     private bool _previewAFailed;
     private bool _previewBFailed;
@@ -474,13 +475,31 @@ public partial class MainWindow : Window
 
     private void OnPowerModeChanged(object? sender, PowerModeChangedEventArgs e)
     {
-        if (e.Mode != PowerModes.Resume || _closing)
+        if (_closing)
         {
             return;
         }
 
-        Log.Info("The computer resumed from sleep.");
-        Dispatcher.BeginInvoke(BeginResumeRecovery);
+        if (e.Mode == PowerModes.Suspend)
+        {
+            Log.Info("The computer is entering sleep. Stopping capture.");
+            Dispatcher.BeginInvoke(() =>
+            {
+                _resumeTimer.Stop();
+                _previewA.Stop();
+                _previewB.Stop();
+                _levelMeter.Stop();
+                _launchMonitor.Stop();
+                _resumedAt = null;
+            });
+            return;
+        }
+
+        if (e.Mode == PowerModes.Resume)
+        {
+            Log.Info("The computer resumed from sleep.");
+            Dispatcher.BeginInvoke(BeginResumeRecovery);
+        }
     }
 
     private void BeginResumeRecovery()
@@ -492,6 +511,8 @@ public partial class MainWindow : Window
 
         _resumeAttempts = 0;
         _restartAttempts = 0;
+        _inUseDialogShown = false;
+        _resumedAt = Stopwatch.StartNew();
         _resumeTimer.Stop();
         RecoverCapture();
         _resumeTimer.Start();
@@ -581,6 +602,12 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (_resumedAt is { Elapsed.TotalSeconds: < 15 })
+        {
+            Log.Info("A camera reported a low frame rate during sleep recovery; suppressing warning dialog.");
+            return;
+        }
+
         _inUseDialogShown = true;
         var pathA = _settings.CameraADevicePath;
         var pathB = _settings.CameraBDevicePath;
@@ -642,6 +669,12 @@ public partial class MainWindow : Window
 
         if (_restartAttempts >= 2)
         {
+            if (_resumedAt is { Elapsed.TotalSeconds: < 15 })
+            {
+                Log.Info($"Cameras still initializing after sleep: {reason}");
+                return;
+            }
+
             StatusDetail.Text = "The cameras stayed at a low frame rate.";
             return;
         }
@@ -708,6 +741,10 @@ public partial class MainWindow : Window
         else if (!found)
         {
             Log.Warn("The cameras did not come back after a restart.");
+        }
+        else if (StatusDetail.Text is "Restarting cameras…" or "The cameras stayed at a low frame rate.")
+        {
+            StatusDetail.Text = "";
         }
 
         RefreshCameras();
@@ -1831,10 +1868,14 @@ public partial class MainWindow : Window
 
         image.Source = bitmap;
         picker.Visibility = Visibility.Collapsed;
-        if (framesPerSecond >= 30)
+        if (framesPerSecond >= 10)
         {
             _restartAttempts = 0;
             _inUseDialogShown = false;
+            if (StatusDetail.Text is "The cameras stayed at a low frame rate." or "Restarting cameras…")
+            {
+                StatusDetail.Text = "";
+            }
         }
         stats.Text = framesPerSecond > 0
             ? $"{width}×{height}   {framesPerSecond:0} fps"
