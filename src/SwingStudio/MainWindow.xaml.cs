@@ -232,6 +232,12 @@ public partial class MainWindow : Window
             if (_savedPixelBounds is { } saved && !_waitingForMonitor)
             {
                 PlaceWindow(saved, false);
+
+                // Placing a hidden window restores it, which WPF reports back as WindowState.Normal.
+                if (_settings.WindowMaximized)
+                {
+                    WindowState = WindowState.Maximized;
+                }
             }
         };
         ContentRendered += (_, _) => _windowShown = true;
