@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Net.NetworkInformation;
 using System.Reflection;
 using System.Windows;
 using Microsoft.Win32;
@@ -41,6 +42,14 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _bufferTimer = new() { Interval = TimeSpan.FromMilliseconds(200) };
     private readonly DispatcherTimer _playbackTimer = new() { Interval = TimeSpan.FromMilliseconds(33) };
     private readonly DispatcherTimer _resumeTimer = new() { Interval = TimeSpan.FromSeconds(5) };
+    private readonly DispatcherTimer _resumeDelayTimer = new() { Interval = TimeSpan.FromSeconds(3) };
+    private readonly DispatcherTimer _networkChangeTimer = new() { Interval = TimeSpan.FromSeconds(2) };
+    private bool _suspended;
+    private readonly DispatcherTimer _windowSaveTimer = new() { Interval = TimeSpan.FromSeconds(1) };
+    private Int32Rect? _savedPixelBounds;
+    private bool _waitingForMonitor;
+    private bool _placingWindow;
+    private bool _windowShown;
     private readonly Stopwatch _playbackClock = new();
     private IReadOnlyList<CameraDevice> _cameras = [];
     private bool _suppressSelection;
@@ -100,6 +109,9 @@ public partial class MainWindow : Window
         _bufferTimer.Tick += (_, _) => ShowBufferStatus();
         _bufferTimer.Start();
         _resumeTimer.Tick += (_, _) => RetryResumeRecovery();
+        _resumeDelayTimer.Tick += (_, _) => BeginResumeRecovery();
+        _networkChangeTimer.Tick += (_, _) => OnNetworkSettled();
+        NetworkChange.NetworkAddressChanged += OnNetworkAddressChanged;
         SystemEvents.PowerModeChanged += OnPowerModeChanged;
         _playbackTimer.Tick += (_, _) => AdvancePlayback();
         CameraADraw.SizeChanged += (_, _) => RedrawDrawings();
@@ -129,6 +141,11 @@ public partial class MainWindow : Window
             _bufferTimer.Stop();
             _playbackTimer.Stop();
             _resumeTimer.Stop();
+            _resumeDelayTimer.Stop();
+            _networkChangeTimer.Stop();
+            NetworkChange.NetworkAddressChanged -= OnNetworkAddressChanged;
+            SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;
+            _windowSaveTimer.Stop();
             SystemEvents.PowerModeChanged -= OnPowerModeChanged;
             _closing = true;
             _launchMonitor.Dispose();
@@ -183,17 +200,106 @@ public partial class MainWindow : Window
             Height = _settings.WindowHeight;
         }
 
-        if (_settings.WindowLeft is double left && _settings.WindowTop is double top && IsOnScreen(left, top, Width, Height))
+        _savedPixelBounds = _settings.WindowPixelBounds is [var x, var y, var width, var height] && width > 0 && height > 0
+            ? new Int32Rect(x, y, width, height)
+            : null;
+        if (_savedPixelBounds is { } bounds)
+        {
+            if (WindowPlacement.IsOnAMonitor(bounds))
+            {
+                WindowStartupLocation = WindowStartupLocation.Manual;
+            }
+            else
+            {
+                _waitingForMonitor = true;
+                Log.Info("The monitor SwingStudio was last on is not connected. Starting on the main monitor until it appears.");
+            }
+        }
+        else if (_settings.WindowLeft is double left && _settings.WindowTop is double top && IsOnScreen(left, top, Width, Height))
         {
             WindowStartupLocation = WindowStartupLocation.Manual;
             Left = left;
             Top = top;
         }
 
-        if (_settings.WindowMaximized)
+        if (_settings.WindowMaximized && !_waitingForMonitor)
         {
             WindowState = WindowState.Maximized;
         }
+
+        SourceInitialized += (_, _) =>
+        {
+            if (_savedPixelBounds is { } saved && !_waitingForMonitor)
+            {
+                PlaceWindow(saved, false);
+            }
+        };
+        ContentRendered += (_, _) => _windowShown = true;
+        LocationChanged += (_, _) => OnWindowMoved();
+        SizeChanged += (_, _) => QueueWindowSave();
+        StateChanged += (_, _) => QueueWindowSave();
+        _windowSaveTimer.Tick += (_, _) =>
+        {
+            _windowSaveTimer.Stop();
+            SaveLayout();
+        };
+        SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
+    }
+
+    private void PlaceWindow(Int32Rect bounds, bool maximized)
+    {
+        _placingWindow = true;
+        try
+        {
+            WindowPlacement.Apply(this, bounds, maximized);
+        }
+        finally
+        {
+            _placingWindow = false;
+        }
+    }
+
+    private void OnWindowMoved()
+    {
+        if (_placingWindow || !_windowShown)
+        {
+            return;
+        }
+
+        // Windows also moves the window when monitors come and go; only a drag means the user chose a new spot.
+        if (_waitingForMonitor && System.Windows.Input.Mouse.LeftButton == System.Windows.Input.MouseButtonState.Pressed)
+        {
+            _waitingForMonitor = false;
+            Log.Info("The window was moved by hand; no longer waiting for the saved monitor.");
+        }
+
+        QueueWindowSave();
+    }
+
+    private void QueueWindowSave()
+    {
+        if (_closing || !_windowShown || _waitingForMonitor)
+        {
+            return;
+        }
+
+        _windowSaveTimer.Stop();
+        _windowSaveTimer.Start();
+    }
+
+    private void OnDisplaySettingsChanged(object? sender, EventArgs e)
+    {
+        Dispatcher.BeginInvoke(() =>
+        {
+            if (_closing || !_waitingForMonitor || _savedPixelBounds is not { } bounds || !WindowPlacement.IsOnAMonitor(bounds))
+            {
+                return;
+            }
+
+            _waitingForMonitor = false;
+            Log.Info("The saved monitor is connected again. Moving the window back.");
+            PlaceWindow(bounds, _settings.WindowMaximized);
+        });
     }
 
     private void PaneSplitter_DragCompleted(object sender, System.Windows.Controls.Primitives.DragCompletedEventArgs e)
@@ -224,12 +330,22 @@ public partial class MainWindow : Window
             _settings.PressurePaneShare = Math.Clamp(footMap / (footMap + weight), MinPaneShare, MaxPaneShare);
         }
 
-        var bounds = WindowState == WindowState.Normal ? new Rect(Left, Top, Width, Height) : RestoreBounds;
-        _settings.WindowLeft = bounds.Left;
-        _settings.WindowTop = bounds.Top;
-        _settings.WindowWidth = bounds.Width;
-        _settings.WindowHeight = bounds.Height;
-        _settings.WindowMaximized = WindowState == WindowState.Maximized;
+        // While the saved monitor is missing, the fallback spot on the main monitor must not replace it.
+        if (!_waitingForMonitor && WindowState != WindowState.Minimized)
+        {
+            var bounds = WindowState == WindowState.Normal ? new Rect(Left, Top, Width, Height) : RestoreBounds;
+            _settings.WindowLeft = bounds.Left;
+            _settings.WindowTop = bounds.Top;
+            _settings.WindowWidth = bounds.Width;
+            _settings.WindowHeight = bounds.Height;
+            _settings.WindowMaximized = WindowState == WindowState.Maximized;
+            if (WindowPlacement.NormalBounds(this) is { } pixels)
+            {
+                _settings.WindowPixelBounds = [pixels.X, pixels.Y, pixels.Width, pixels.Height];
+                _savedPixelBounds = pixels;
+            }
+        }
+
         SettingsStore.Save(_settings);
     }
 
@@ -483,28 +599,69 @@ public partial class MainWindow : Window
         if (e.Mode == PowerModes.Suspend)
         {
             Log.Info("The computer is entering sleep. Stopping capture.");
-            Dispatcher.BeginInvoke(() =>
+            // Windows keeps suspending once this handler returns, so the cameras must be released before then.
+            if (Dispatcher.CheckAccess())
             {
-                _resumeTimer.Stop();
-                _previewA.Stop();
-                _previewB.Stop();
-                _levelMeter.Stop();
-                _launchMonitor.Stop();
-                _resumedAt = null;
-            });
+                StopCaptureForSleep();
+            }
+            else
+            {
+                Dispatcher.Invoke(StopCaptureForSleep, DispatcherPriority.Send, CancellationToken.None, TimeSpan.FromSeconds(6));
+            }
+
             return;
         }
 
         if (e.Mode == PowerModes.Resume)
         {
             Log.Info("The computer resumed from sleep.");
-            Dispatcher.BeginInvoke(BeginResumeRecovery);
+            Dispatcher.BeginInvoke(() =>
+            {
+                _suspended = false;
+                _resumeDelayTimer.Stop();
+                _resumeDelayTimer.Start();
+            });
         }
+    }
+
+    private void OnNetworkAddressChanged(object? sender, EventArgs e)
+    {
+        Dispatcher.BeginInvoke(() =>
+        {
+            _networkChangeTimer.Stop();
+            _networkChangeTimer.Start();
+        });
+    }
+
+    private void OnNetworkSettled()
+    {
+        _networkChangeTimer.Stop();
+        if (_closing || _suspended || !IsLaunchMonitor || _launchMonitorStatus == NpcapMissingStatus || !_launchMonitor.NeedsAdapterChange())
+        {
+            return;
+        }
+
+        Log.Info("The network changed. Choosing the ProTee VX Labs adapter again.");
+        ApplyTriggerSource();
+    }
+
+    private void StopCaptureForSleep()
+    {
+        _suspended = true;
+        _resumeDelayTimer.Stop();
+        _resumeTimer.Stop();
+        _resumedAt = null;
+        var stoppedA = _previewA.Stop();
+        var stoppedB = _previewB.Stop();
+        _levelMeter.Stop();
+        _launchMonitor.Stop();
+        Log.Info(stoppedA && stoppedB ? "Capture stopped for sleep." : "Capture did not fully stop before sleep.");
     }
 
     private void BeginResumeRecovery()
     {
-        if (_closing)
+        _resumeDelayTimer.Stop();
+        if (_closing || _suspended)
         {
             return;
         }
@@ -521,7 +678,7 @@ public partial class MainWindow : Window
     private void RetryResumeRecovery()
     {
         _resumeAttempts++;
-        if (_closing || _resumeAttempts > 5 || CaptureIsReady())
+        if (_closing || _suspended || _resumeAttempts > 5 || CaptureIsReady())
         {
             _resumeTimer.Stop();
             return;
@@ -597,7 +754,7 @@ public partial class MainWindow : Window
 
     private void OnCameraStalled()
     {
-        if (_closing || _inUseDialogShown)
+        if (_closing || _suspended || _inUseDialogShown)
         {
             return;
         }
@@ -662,7 +819,7 @@ public partial class MainWindow : Window
 
     private void RequestCameraRestart(string reason)
     {
-        if (_closing || _restartingCameras)
+        if (_closing || _suspended || _restartingCameras)
         {
             return;
         }
@@ -692,6 +849,8 @@ public partial class MainWindow : Window
         StatusDetail.Text = "Restarting cameras…";
         var pathA = _settings.CameraADevicePath;
         var pathB = _settings.CameraBDevicePath;
+        var nameA = _settings.CameraAFriendlyName;
+        var nameB = _settings.CameraBFriendlyName;
         Task.Run(() =>
         {
             var restarted = false;
@@ -710,8 +869,12 @@ public partial class MainWindow : Window
             for (var attempt = 0; attempt < 20 && !_closing; attempt++)
             {
                 var cameras = CameraEnumerator.List();
-                var readyA = string.IsNullOrEmpty(pathA) || cameras.Any(camera => string.Equals(camera.DevicePath, pathA, StringComparison.OrdinalIgnoreCase));
-                var readyB = string.IsNullOrEmpty(pathB) || cameras.Any(camera => string.Equals(camera.DevicePath, pathB, StringComparison.OrdinalIgnoreCase));
+                var readyA = string.IsNullOrEmpty(pathA)
+                    || cameras.Any(camera => string.Equals(camera.DevicePath, pathA, StringComparison.OrdinalIgnoreCase))
+                    || FindMovedCamera(cameras, pathA, nameA, pathB) is not null;
+                var readyB = string.IsNullOrEmpty(pathB)
+                    || cameras.Any(camera => string.Equals(camera.DevicePath, pathB, StringComparison.OrdinalIgnoreCase))
+                    || FindMovedCamera(cameras, pathB, nameB, pathA) is not null;
                 if (readyA && readyB)
                 {
                     found = true;
@@ -728,7 +891,7 @@ public partial class MainWindow : Window
     private void FinishCameraRestart(bool found, bool restarted)
     {
         _restartingCameras = false;
-        if (_closing)
+        if (_closing || _suspended)
         {
             return;
         }
@@ -1730,12 +1893,58 @@ public partial class MainWindow : Window
     private void RefreshCameras()
     {
         _cameras = CameraEnumerator.List();
+        AdoptMovedCamera(true);
+        AdoptMovedCamera(false);
         _suppressSelection = true;
         CameraAList.ItemsSource = _cameras;
         CameraBList.ItemsSource = _cameras;
         CameraAList.SelectedItem = _cameras.FirstOrDefault(camera => camera.DevicePath == _settings.CameraADevicePath);
         CameraBList.SelectedItem = _cameras.FirstOrDefault(camera => camera.DevicePath == _settings.CameraBDevicePath);
         _suppressSelection = false;
+    }
+
+    private void AdoptMovedCamera(bool isA)
+    {
+        var path = isA ? _settings.CameraADevicePath : _settings.CameraBDevicePath;
+        var name = isA ? _settings.CameraAFriendlyName : _settings.CameraBFriendlyName;
+        var otherPath = isA ? _settings.CameraBDevicePath : _settings.CameraADevicePath;
+        var moved = FindMovedCamera(_cameras, path, name, otherPath);
+        if (moved is null || path is null)
+        {
+            return;
+        }
+
+        if (isA)
+        {
+            _settings.CameraADevicePath = moved.DevicePath;
+        }
+        else
+        {
+            _settings.CameraBDevicePath = moved.DevicePath;
+        }
+
+        if (_settings.CameraControls.Remove(path, out var controls))
+        {
+            _settings.CameraControls[moved.DevicePath] = controls;
+        }
+
+        SettingsStore.Save(_settings);
+        Log.Info($"{(isA ? "Camera A" : "Camera B")} moved from {path} to {moved.DevicePath}; kept its {controls?.Count ?? 0} saved control value(s).");
+    }
+
+    /// <summary>The camera that a saved path now belongs to after Windows gave it a new USB path, if exactly one camera can match.</summary>
+    private static CameraDevice? FindMovedCamera(IReadOnlyList<CameraDevice> cameras, string? path, string? name, string? otherPath)
+    {
+        if (string.IsNullOrEmpty(path) || string.IsNullOrEmpty(name)
+            || cameras.Any(camera => string.Equals(camera.DevicePath, path, StringComparison.OrdinalIgnoreCase)))
+        {
+            return null;
+        }
+
+        var matches = cameras
+            .Where(camera => camera.Name == name && !string.Equals(camera.DevicePath, otherPath, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        return matches.Count == 1 ? matches[0] : null;
     }
 
     private void ApplyPane(bool isA)
@@ -1773,6 +1982,8 @@ public partial class MainWindow : Window
             return;
         }
 
+        AdoptMovedCamera(isA);
+        path = (isA ? _settings.CameraADevicePath : _settings.CameraBDevicePath) ?? path;
         var label = isA ? "Camera A" : "Camera B";
         var camera = _cameras.FirstOrDefault(item => item.DevicePath == path);
         if (camera is null)

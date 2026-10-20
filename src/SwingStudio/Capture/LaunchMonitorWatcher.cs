@@ -44,7 +44,7 @@ public sealed class LaunchMonitorWatcher : IDisposable
         var device = FindLinkLocal(devices);
         if (device is null)
         {
-            Log.Warn("ProTee VX Labs adapter not found. No adapter has a 169.254 address.");
+            Log.Warn("ProTee VX Labs adapter not found. No wired adapter has a 169.254 address.");
             return LaunchMonitorWatchState.AdapterNotFound;
         }
 
@@ -147,27 +147,57 @@ public sealed class LaunchMonitorWatcher : IDisposable
         onShot();
     }
 
+    /// <summary>True when the adapter being watched is no longer the best ProTee candidate, or nothing is being watched.</summary>
+    public bool NeedsAdapterChange()
+    {
+        var device = _device;
+        var nic = FindAdapter();
+        if (device is null)
+        {
+            return nic is not null;
+        }
+
+        return nic is null || !IsSameAdapter(device, nic);
+    }
+
     private static LibPcapLiveDevice? FindLinkLocal(LibPcapLiveDeviceList devices)
     {
-        var nic = NetworkInterface.GetAllNetworkInterfaces()
+        var nic = FindAdapter();
+        return nic is null ? null : devices.FirstOrDefault(device => IsSameAdapter(device, nic));
+    }
+
+    private static NetworkInterface? FindAdapter() =>
+        NetworkInterface.GetAllNetworkInterfaces()
             .Where(item => item.OperationalStatus == OperationalStatus.Up)
-            .Where(item => item.NetworkInterfaceType == NetworkInterfaceType.Ethernet)
-            .FirstOrDefault(HasLinkLocal);
-        nic ??= NetworkInterface.GetAllNetworkInterfaces().FirstOrDefault(HasLinkLocal);
-        if (nic is null)
+            .Where(IsCandidate)
+            .Where(HasLinkLocal)
+            .OrderBy(item => item.NetworkInterfaceType is NetworkInterfaceType.Ethernet or NetworkInterfaceType.GigabitEthernet ? 0 : 1)
+            .FirstOrDefault();
+
+    // A disconnected Bluetooth PAN adapter gives itself a 169.254 address and reports itself as Ethernet.
+    private static readonly string[] ExcludedAdapterWords = ["Bluetooth", "Virtual", "Hyper-V", "VMware", "VirtualBox", "Loopback", "TAP-", "VPN", "WSL", "Wintun", "WireGuard"];
+
+    private static bool IsCandidate(NetworkInterface nic)
+    {
+        if (nic.NetworkInterfaceType is NetworkInterfaceType.Loopback or NetworkInterfaceType.Tunnel)
         {
-            return null;
+            return false;
         }
 
+        return !ExcludedAdapterWords.Any(word =>
+            nic.Description.Contains(word, StringComparison.OrdinalIgnoreCase)
+            || nic.Name.Contains(word, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool IsSameAdapter(LibPcapLiveDevice device, NetworkInterface nic)
+    {
         var mac = nic.GetPhysicalAddress();
-        var match = devices.FirstOrDefault(device => mac.GetAddressBytes().Length > 0 && device.MacAddress is not null && device.MacAddress.Equals(mac));
-        if (match is not null)
+        if (mac.GetAddressBytes().Length > 0 && device.MacAddress is not null && device.MacAddress.Equals(mac))
         {
-            return match;
+            return true;
         }
 
-        return devices.FirstOrDefault(device =>
-            device.Addresses.Any(address => address.Addr?.ipAddress is IPAddress ip && IsLinkLocal(ip)));
+        return device.Name.Contains(nic.Id, StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool HasLinkLocal(NetworkInterface nic) =>

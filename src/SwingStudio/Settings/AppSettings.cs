@@ -20,6 +20,9 @@ public sealed class AppSettings
 
     public bool WindowMaximized { get; set; }
 
+    /// <summary>Normal window bounds in workspace pixels as left, top, width, height. Used to find the saved monitor.</summary>
+    public int[]? WindowPixelBounds { get; set; }
+
     public string? CameraADevicePath { get; set; }
 
     public string? CameraAFriendlyName { get; set; }

@@ -68,12 +68,19 @@ public sealed class CameraPreview : IDisposable
         return true;
     }
 
-    public void Stop()
+    public bool Stop()
     {
         _stop = true;
         Interlocked.Increment(ref _generation);
-        _thread?.Join(TimeSpan.FromSeconds(2));
+        var thread = _thread;
         _thread = null;
+        if (thread is null || thread.Join(TimeSpan.FromSeconds(2)))
+        {
+            return true;
+        }
+
+        Log.Warn($"{_label} capture did not stop within 2 s; the camera may still be open.");
+        return false;
     }
 
     public void Dispose() => Stop();
